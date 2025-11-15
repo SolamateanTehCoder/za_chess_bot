@@ -1,4 +1,6 @@
 __pycache__/**
 checkpoints/**
 plots/**
-training.log
+videos/**
+*.log
+filelist.txt
