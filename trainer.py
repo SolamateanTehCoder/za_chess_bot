@@ -100,6 +100,8 @@ class ChessTrainer:
             print("No training data available")
             return {'policy_loss': 0, 'value_loss': 0, 'total_loss': 0}
         
+        print(f"Training on {len(states)} samples...")
+        
         # Create dataset and dataloader
         dataset = ChessDataset(states, actions, returns, advantages, old_log_probs)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
