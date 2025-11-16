@@ -214,7 +214,8 @@ class GameWorker(threading.Thread):
         for i, (move, player) in enumerate(self.experience.move_history, 1):
             move_num = (i + 1) // 2
             if i % 2 == 1:
-                log_lines.append(f"{move_num}. {move.uci():8} ({player})", end="")
+                # Start a new move pair line
+                log_lines.append(f"{move_num}. {move.uci():8} ({player})")
             else:
                 # Add to same line for paired moves
                 log_lines[-1] = log_lines[-1] + f"  {move.uci():8} ({player})"
