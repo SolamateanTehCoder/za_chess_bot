@@ -5,9 +5,10 @@ import queue
 import chess
 import torch
 import numpy as np
+from datetime import datetime
 from chess_env import ChessEnvironment
 from stockfish_opponent import StockfishOpponent
-from config import USE_CUDA
+from config import USE_CUDA, GAMES_LOG_FILE
 
 
 class GameExperience:
@@ -146,6 +147,9 @@ class GameWorker(threading.Thread):
             else:
                 ai_result = "draw"
             
+            # Log game details to games.log
+            self._log_game(result, ai_result, move_count)
+            
             print(f"Game {self.game_id} finished: {result} (AI: {ai_result})")
             
         except Exception as e:
@@ -157,6 +161,23 @@ class GameWorker(threading.Thread):
         finally:
             stockfish.close()
             self.result_queue.put((self.game_id, self.experience))
+    
+    def _log_game(self, result, ai_result, move_count):
+        """Log game details to games.log file."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        color = "White" if self.play_as_white else "Black"
+        
+        log_entry = (
+            f"[{timestamp}] Game {self.game_id}: "
+            f"AI as {color} | Result: {result} | "
+            f"AI: {ai_result.upper()} | Moves: {move_count}\n"
+        )
+        
+        try:
+            with open(GAMES_LOG_FILE, 'a') as f:
+                f.write(log_entry)
+        except Exception as e:
+            print(f"Warning: Could not write to {GAMES_LOG_FILE}: {e}")
 
 
 class ParallelGamePlayer:

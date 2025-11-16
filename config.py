@@ -27,3 +27,4 @@ USE_CUDA = True  # Set to False to use CPU
 CHECKPOINT_DIR = "checkpoints"
 SAVE_FREQUENCY = 10  # Save model every N epochs
 LOG_FILE = "training.log"
+GAMES_LOG_FILE = "games.log"
