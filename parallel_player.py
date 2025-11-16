@@ -8,7 +8,7 @@ import numpy as np
 from datetime import datetime
 from chess_env import ChessEnvironment
 from stockfish_opponent import StockfishOpponent
-from chess_knowledge import ChessKnowledge
+from comprehensive_chess_knowledge import ComprehensiveChessKnowledge
 from config import USE_CUDA, GAMES_LOG_FILE
 
 
@@ -68,7 +68,7 @@ class GameWorker(threading.Thread):
         self.result_queue = result_queue
         self.play_as_white = play_as_white
         self.experience = GameExperience(ai_plays_white=play_as_white)
-        self.knowledge = ChessKnowledge() if use_knowledge else None
+        self.knowledge = ComprehensiveChessKnowledge() if use_knowledge else None
     
     def run(self):
         """Run a complete game and collect experience."""
@@ -104,30 +104,30 @@ class GameWorker(threading.Thread):
                     if move is None:
                         state_tensor = state.to(self.device)
                         legal_moves_mask = env.get_legal_moves_mask().to(self.device)
-                    
-                    # Get model prediction
-                    with torch.no_grad():
-                        policy, value = self.model(state_tensor.unsqueeze(0))
-                        policy = policy.squeeze(0)
                         
-                        # Mask illegal moves
-                        policy = policy.masked_fill(~legal_moves_mask, float('-inf'))
+                        # Get model prediction
+                        with torch.no_grad():
+                            policy, value = self.model(state_tensor.unsqueeze(0))
+                            policy = policy.squeeze(0)
+                            
+                            # Mask illegal moves
+                            policy = policy.masked_fill(~legal_moves_mask, float('-inf'))
+                            
+                            # Get move probabilities
+                            move_probs = torch.softmax(policy, dim=0)
+                            
+                            # Sample a move
+                            move_idx = torch.multinomial(move_probs, 1).item()
+                            log_prob = torch.log(move_probs[move_idx] + 1e-8)
                         
-                        # Get move probabilities
-                        move_probs = torch.softmax(policy, dim=0)
+                        # Convert index to move
+                        move = env.index_to_move(move_idx)
                         
-                        # Sample a move
-                        move_idx = torch.multinomial(move_probs, 1).item()
-                        log_prob = torch.log(move_probs[move_idx] + 1e-8)
-                    
-                    # Convert index to move
-                    move = env.index_to_move(move_idx)
-                    
-                    # If move is invalid, pick a random legal move
-                    if move is None or move not in env.board.legal_moves:
-                        legal_moves = list(env.board.legal_moves)
-                        move = np.random.choice(legal_moves)
-                        move_idx = env.move_to_index(move)
+                        # If move is invalid, pick a random legal move
+                        if move is None or move not in env.board.legal_moves:
+                            legal_moves = list(env.board.legal_moves)
+                            move = np.random.choice(legal_moves)
+                            move_idx = env.move_to_index(move)
                     
                     # Make the move
                     next_state, reward, done, info = env.step(move)
