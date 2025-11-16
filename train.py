@@ -11,7 +11,7 @@ from utils import plot_training_progress
 from config import (
     NUM_PARALLEL_GAMES, NUM_EPOCHS, LOOKAHEAD_MOVES,
     HIDDEN_SIZE, NUM_RESIDUAL_BLOCKS, LEARNING_RATE,
-    USE_CUDA, CHECKPOINT_DIR, SAVE_FREQUENCY, LOG_FILE, TARGET_WIN_RATE
+    USE_CUDA, CHECKPOINT_DIR, SAVE_FREQUENCY, LOG_FILE, TARGET_WIN_RATE, USE_CHESS_KNOWLEDGE
 )
 
 
@@ -72,7 +72,8 @@ def main():
     game_player = ParallelGamePlayer(
         model=model,
         num_games=NUM_PARALLEL_GAMES,
-        device=device
+        device=device,
+        use_knowledge=USE_CHESS_KNOWLEDGE
     )
     
     # Training configuration
@@ -82,6 +83,10 @@ def main():
     log_message(f"  - Lookahead moves: {LOOKAHEAD_MOVES}")
     log_message(f"  - Learning rate: {LEARNING_RATE}")
     log_message(f"  - Save frequency: every {SAVE_FREQUENCY} epochs")
+    log_message(f"  - Chess knowledge enabled: {USE_CHESS_KNOWLEDGE}")
+    if USE_CHESS_KNOWLEDGE:
+        log_message("    • Opening book will be used for first moves")
+        log_message("    • Endgame knowledge will assist in endgame positions")
     print()
     
     # Check if checkpoint exists

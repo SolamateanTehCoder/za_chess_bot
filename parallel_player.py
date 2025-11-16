@@ -8,6 +8,7 @@ import numpy as np
 from datetime import datetime
 from chess_env import ChessEnvironment
 from stockfish_opponent import StockfishOpponent
+from chess_knowledge import ChessKnowledge
 from config import USE_CUDA, GAMES_LOG_FILE
 
 
@@ -23,6 +24,7 @@ class GameExperience:
         self.done = False
         self.result = None
         self.ai_plays_white = ai_plays_white
+        self.move_history = []  # Store all moves for logging
     
     def add_step(self, state, action, reward, value, log_prob):
         """Add a step to the experience."""
@@ -31,6 +33,10 @@ class GameExperience:
         self.rewards.append(reward)
         self.values.append(value)
         self.log_probs.append(log_prob)
+    
+    def add_move(self, move, player):
+        """Add a move to history for logging."""
+        self.move_history.append((move, player))
     
     def set_result(self, result):
         """Set the final game result."""
@@ -43,7 +49,7 @@ class GameWorker(threading.Thread):
     Worker thread that plays a single game against Stockfish.
     """
     
-    def __init__(self, game_id, model, device, result_queue, play_as_white=True):
+    def __init__(self, game_id, model, device, result_queue, play_as_white=True, use_knowledge=True):
         """
         Initialize game worker.
         
@@ -53,6 +59,7 @@ class GameWorker(threading.Thread):
             device: Torch device (CPU or CUDA)
             result_queue: Queue to put game results
             play_as_white: Whether the AI plays as white or black
+            use_knowledge: Whether to use opening book and endgame knowledge
         """
         super().__init__()
         self.game_id = game_id
@@ -61,6 +68,7 @@ class GameWorker(threading.Thread):
         self.result_queue = result_queue
         self.play_as_white = play_as_white
         self.experience = GameExperience(ai_plays_white=play_as_white)
+        self.knowledge = ChessKnowledge() if use_knowledge else None
     
     def run(self):
         """Run a complete game and collect experience."""
@@ -82,8 +90,20 @@ class GameWorker(threading.Thread):
                 
                 if is_ai_turn:
                     # AI's turn
-                    state_tensor = state.to(self.device)
-                    legal_moves_mask = env.get_legal_moves_mask().to(self.device)
+                    move = None
+                    move_source = "neural_network"
+                    
+                    # Try to use chess knowledge first (opening book or endgame)
+                    if self.knowledge:
+                        knowledge_move, source = self.knowledge.get_assisted_move(env.board)
+                        if knowledge_move:
+                            move = knowledge_move
+                            move_source = source
+                    
+                    # If no knowledge move, use neural network
+                    if move is None:
+                        state_tensor = state.to(self.device)
+                        legal_moves_mask = env.get_legal_moves_mask().to(self.device)
                     
                     # Get model prediction
                     with torch.no_grad():
@@ -112,14 +132,18 @@ class GameWorker(threading.Thread):
                     # Make the move
                     next_state, reward, done, info = env.step(move)
                     
-                    # Store experience
-                    self.experience.add_step(
-                        state.cpu(),
-                        move_idx,
-                        reward,
-                        value.item(),
-                        log_prob.item()
-                    )
+                    # Record move for logging (with source)
+                    self.experience.add_move(move, f"AI-{move_source}")
+                    
+                    # Store experience only if from neural network
+                    if move_source == "neural_network":
+                        self.experience.add_step(
+                            state.cpu(),
+                            move_idx,
+                            reward,
+                            value.item(),
+                            log_prob.item()
+                        )
                     
                     state = next_state
                     
@@ -127,6 +151,9 @@ class GameWorker(threading.Thread):
                     # Stockfish's turn
                     move = stockfish.get_move(env.board)
                     state, reward, done, info = env.step(move)
+                    
+                    # Record move for logging
+                    self.experience.add_move(move, "Stockfish")
                 
                 move_count += 1
             
@@ -147,8 +174,11 @@ class GameWorker(threading.Thread):
             else:
                 ai_result = "draw"
             
+            # Get knowledge usage stats
+            knowledge_stats = self.knowledge.get_stats() if self.knowledge else {}
+            
             # Log game details to games.log
-            self._log_game(result, ai_result, move_count)
+            self._log_game(result, ai_result, move_count, knowledge_stats)
             
             print(f"Game {self.game_id} finished: {result} (AI: {ai_result})")
             
@@ -162,20 +192,42 @@ class GameWorker(threading.Thread):
             stockfish.close()
             self.result_queue.put((self.game_id, self.experience))
     
-    def _log_game(self, result, ai_result, move_count):
+    def _log_game(self, result, ai_result, move_count, knowledge_stats=None):
         """Log game details to games.log file."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         color = "White" if self.play_as_white else "Black"
         
-        log_entry = (
-            f"[{timestamp}] Game {self.game_id}: "
-            f"AI as {color} | Result: {result} | "
-            f"AI: {ai_result.upper()} | Moves: {move_count}\n"
-        )
+        # Create detailed game log
+        log_lines = []
+        log_lines.append("=" * 80)
+        log_lines.append(f"[{timestamp}] Game {self.game_id}")
+        log_lines.append(f"AI Color: {color} | Result: {result} | Outcome: {ai_result.upper()} | Moves: {move_count}")
+        
+        # Add knowledge stats if available
+        if knowledge_stats:
+            log_lines.append(f"Book Moves: {knowledge_stats.get('book_moves_used', 0)} | "
+                           f"Endgame Assists: {knowledge_stats.get('endgame_assists', 0)}")
+        
+        log_lines.append("-" * 80)
+        
+        # Log each move
+        for i, (move, player) in enumerate(self.experience.move_history, 1):
+            move_num = (i + 1) // 2
+            if i % 2 == 1:
+                log_lines.append(f"{move_num}. {move.uci():8} ({player})", end="")
+            else:
+                # Add to same line for paired moves
+                log_lines[-1] = log_lines[-1] + f"  {move.uci():8} ({player})"
+        
+        # Add final result
+        log_lines.append("")
+        log_lines.append(f"Final Result: {result}")
+        log_lines.append("=" * 80)
+        log_lines.append("")
         
         try:
             with open(GAMES_LOG_FILE, 'a') as f:
-                f.write(log_entry)
+                f.write('\n'.join(log_lines) + '\n')
         except Exception as e:
             print(f"Warning: Could not write to {GAMES_LOG_FILE}: {e}")
 
@@ -185,7 +237,7 @@ class ParallelGamePlayer:
     Manages multiple games playing in parallel using threads.
     """
     
-    def __init__(self, model, num_games=10, device=None):
+    def __init__(self, model, num_games=10, device=None, use_knowledge=True):
         """
         Initialize parallel game player.
         
@@ -193,9 +245,11 @@ class ParallelGamePlayer:
             model: Neural network model
             num_games: Number of games to play in parallel
             device: Torch device (CPU or CUDA)
+            use_knowledge: Whether to use opening book and endgame knowledge
         """
         self.model = model
         self.num_games = num_games
+        self.use_knowledge = use_knowledge
         
         if device is None:
             self.device = torch.device("cuda" if USE_CUDA and torch.cuda.is_available() else "cpu")
@@ -223,7 +277,7 @@ class ParallelGamePlayer:
         for i in range(self.num_games):
             # Alternate between playing as white and black
             play_as_white = (i % 2 == 0)
-            worker = GameWorker(i, self.model, self.device, result_queue, play_as_white)
+            worker = GameWorker(i, self.model, self.device, result_queue, play_as_white, self.use_knowledge)
             worker.start()
             workers.append(worker)
         
