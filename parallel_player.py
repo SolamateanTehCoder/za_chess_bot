@@ -90,44 +90,43 @@ class GameWorker(threading.Thread):
                 
                 if is_ai_turn:
                     # AI's turn
-                    move = None
+                    state_tensor = state.to(self.device)
+                    legal_moves_mask = env.get_legal_moves_mask().to(self.device)
+                    
+                    # ALWAYS get model prediction for training (even if we use opening book)
+                    with torch.no_grad():
+                        policy, value = self.model(state_tensor.unsqueeze(0))
+                        policy = policy.squeeze(0)
+                        
+                        # Mask illegal moves
+                        policy = policy.masked_fill(~legal_moves_mask, float('-inf'))
+                        
+                        # Get move probabilities
+                        move_probs = torch.softmax(policy, dim=0)
+                        
+                        # Sample a move from neural network
+                        move_idx = torch.multinomial(move_probs, 1).item()
+                        log_prob = torch.log(move_probs[move_idx] + 1e-8)
+                        nn_move = env.index_to_move(move_idx)
+                    
+                    # Check if we should use opening book instead
+                    move = nn_move
                     move_source = "neural_network"
                     
-                    # Try to use chess knowledge first (opening book or endgame)
                     if self.knowledge:
                         knowledge_move, source = self.knowledge.get_assisted_move(env.board)
                         if knowledge_move:
+                            # Use opening book move but keep neural network's evaluation
                             move = knowledge_move
                             move_source = source
-                    
-                    # If no knowledge move, use neural network
-                    if move is None:
-                        state_tensor = state.to(self.device)
-                        legal_moves_mask = env.get_legal_moves_mask().to(self.device)
-                        
-                        # Get model prediction
-                        with torch.no_grad():
-                            policy, value = self.model(state_tensor.unsqueeze(0))
-                            policy = policy.squeeze(0)
-                            
-                            # Mask illegal moves
-                            policy = policy.masked_fill(~legal_moves_mask, float('-inf'))
-                            
-                            # Get move probabilities
-                            move_probs = torch.softmax(policy, dim=0)
-                            
-                            # Sample a move
-                            move_idx = torch.multinomial(move_probs, 1).item()
-                            log_prob = torch.log(move_probs[move_idx] + 1e-8)
-                        
-                        # Convert index to move
-                        move = env.index_to_move(move_idx)
-                        
-                        # If move is invalid, pick a random legal move
-                        if move is None or move not in env.board.legal_moves:
-                            legal_moves = list(env.board.legal_moves)
-                            move = np.random.choice(legal_moves)
+                            # Update move_idx to match the opening book move
                             move_idx = env.move_to_index(move)
+                    
+                    # If move is invalid, pick a random legal move
+                    if move is None or move not in env.board.legal_moves:
+                        legal_moves = list(env.board.legal_moves)
+                        move = np.random.choice(legal_moves)
+                        move_idx = env.move_to_index(move)
                     
                     # Make the move
                     next_state, reward, done, info = env.step(move)
@@ -135,14 +134,13 @@ class GameWorker(threading.Thread):
                     # Record move for logging (with source)
                     self.experience.add_move(move, f"AI-{move_source}")
                     
-                    # Store experience only if from neural network
-                    if move_source == "neural_network":
-                        self.experience.add_step(
-                            state.cpu(),
-                            move_idx,
-                            reward,
-                            value.item(),
-                            log_prob.item()
+                    # ALWAYS store experience for training (even opening book moves)
+                    self.experience.add_step(
+                        state.cpu(),
+                        move_idx,
+                        reward,
+                        value.item(),
+                        log_prob.item()
                         )
                     
                     state = next_state
