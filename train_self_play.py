@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from model import ChessNet
 from chess_env import ChessEnvironment
-from trainer import PPOTrainer
+from trainer import ChessTrainer
 from config import (
-    USE_CUDA, LEARNING_RATE, GAMMA, BATCH_SIZE, PPO_EPOCHS,
+    USE_CUDA, LEARNING_RATE, GAMMA, BATCH_SIZE, NUM_EPOCHS,
     CHECKPOINT_DIR, USE_CHESS_KNOWLEDGE
 )
 
@@ -55,7 +55,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
     model = model.to(device)
     
     # Initialize trainer
-    trainer = PPOTrainer(model, device=device, learning_rate=LEARNING_RATE)
+    trainer = ChessTrainer(model, device=device, learning_rate=LEARNING_RATE)
     
     # Training configuration
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training Configuration:")
@@ -192,7 +192,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
             training_data['advantages'].append(exp['reward'])
         
         # Train
-        results = trainer.train_epoch(training_data, batch_size=BATCH_SIZE, ppo_epochs=PPO_EPOCHS)
+        results = trainer.train_epoch(training_data, batch_size=BATCH_SIZE, ppo_epochs=4)
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training completed")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Policy Loss: {results['policy_loss']:.6f}")
