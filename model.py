@@ -37,8 +37,13 @@ class ChessNet(nn.Module):
     - Value head: position evaluation [-1, 1]
     """
     
-    def __init__(self, num_residual_blocks=10, num_channels=256):
+    def __init__(self, num_residual_blocks=10, num_channels=None):
         super(ChessNet, self).__init__()
+        
+        # Import here to avoid circular dependency
+        from config import HIDDEN_SIZE
+        if num_channels is None:
+            num_channels = HIDDEN_SIZE
         
         # Input layer
         self.input_conv = nn.Conv2d(119, num_channels, kernel_size=3, padding=1)

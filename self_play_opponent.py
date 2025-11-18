@@ -87,6 +87,7 @@ class SelfPlayGameWorker:
         self.device = device
         self.use_knowledge = use_knowledge
         self.opponent = SelfPlayOpponent(model, device)
+        self.temperature = 1.0  # For move selection
         
         # Track game as tuple (move, player)
         self.move_history = []
@@ -125,7 +126,7 @@ class SelfPlayGameWorker:
         from chess_env import ChessEnvironment
         from comprehensive_chess_knowledge import ComprehensiveChessKnowledge
         
-        board = env.reset()
+        env.reset()  # Reset environment to get fresh board
         game_knowledge = ComprehensiveChessKnowledge() if self.use_knowledge else None
         
         experiences = []  # List of (state, action, reward, value, log_prob) tuples
@@ -134,12 +135,12 @@ class SelfPlayGameWorker:
         move_count = 0
         max_moves = 200
         
-        while not board.is_game_over() and move_count < max_moves:
-            is_ai_turn = (board.turn == chess.WHITE) == play_as_white
+        while not env.board.is_game_over() and move_count < max_moves:
+            is_ai_turn = (env.board.turn == chess.WHITE) == play_as_white
             
             if is_ai_turn:
                 # Get board state
-                state_tensor = env.get_state().to(self.device)
+                state_tensor = env.encode_board().to(self.device)
                 legal_moves_mask = env.get_legal_moves_mask().to(self.device)
                 
                 # Get neural network move
@@ -150,15 +151,15 @@ class SelfPlayGameWorker:
                 move_source = "self_play"
                 
                 if game_knowledge:
-                    knowledge_move, source = game_knowledge.get_assisted_move(board)
+                    knowledge_move, source = game_knowledge.get_assisted_move(env.board)
                     if knowledge_move:
                         move = knowledge_move
                         move_source = f"opening_book({source})"
                         move_idx = env.move_to_index(move)
                 
                 # Fallback to random if invalid
-                if move is None or move not in board.legal_moves:
-                    legal_moves = list(board.legal_moves)
+                if move is None or move not in env.board.legal_moves:
+                    legal_moves = list(env.board.legal_moves)
                     move = np.random.choice(legal_moves)
                     move_idx = env.move_to_index(move)
                 
@@ -183,34 +184,35 @@ class SelfPlayGameWorker:
             
             else:
                 # Opponent's turn (also using neural network)
-                state_tensor = env.get_state().to(self.device)
+                state_tensor = env.encode_board().to(self.device)
                 legal_moves_mask = env.get_legal_moves_mask().to(self.device)
                 
                 move_idx, policy, value = self.get_move_from_network(state_tensor, legal_moves_mask)
                 
                 move = env.index_to_move(move_idx)
+                move_source = "self_play"
                 
                 # Check for opening book
                 if game_knowledge:
-                    knowledge_move, source = game_knowledge.get_assisted_move(board)
+                    knowledge_move, source = game_knowledge.get_assisted_move(env.board)
                     if knowledge_move:
                         move = knowledge_move
+                        move_source = f"opening_book({source})"
                 
                 # Fallback to random if invalid
-                if move is None or move not in board.legal_moves:
-                    legal_moves = list(board.legal_moves)
+                if move is None or move not in env.board.legal_moves:
+                    legal_moves = list(env.board.legal_moves)
                     move = np.random.choice(legal_moves)
                 
                 next_state, reward, done, info = env.step(move)
                 self.move_history.append((move, f"Opponent-{move_source}"))
             
-            board = next_state
             move_count += 1
         
         # Determine result
-        if board.is_checkmate():
-            result = "Win" if (board.turn != chess.WHITE) == play_as_white else "Loss"
-        elif board.is_stalemate() or board.is_insufficient_material() or board.is_repetition() or board.is_fiftypath():
+        if env.board.is_checkmate():
+            result = "Win" if (env.board.turn != chess.WHITE) == play_as_white else "Loss"
+        elif env.board.is_stalemate() or env.board.is_insufficient_material() or env.board.is_repetition() or env.board.is_fivefold_repetition():
             result = "Draw"
         else:
             result = "Draw"  # Max moves reached

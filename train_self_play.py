@@ -54,6 +54,18 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
     
     model = model.to(device)
     
+    # Load Stockfish-trained model as starting point
+    stockfish_checkpoint_path = os.path.join(CHECKPOINT_DIR, 'latest_checkpoint.pt')
+    if os.path.exists(stockfish_checkpoint_path):
+        try:
+            checkpoint = torch.load(stockfish_checkpoint_path, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Loaded Stockfish-trained model as base for self-play")
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: Could not load Stockfish model: {e}")
+    else:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: Stockfish checkpoint not found at {stockfish_checkpoint_path}")
+    
     # Initialize trainer
     trainer = ChessTrainer(model, device=device, learning_rate=LEARNING_RATE)
     
@@ -66,24 +78,25 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Learning rate: {LEARNING_RATE}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Chess knowledge enabled: {USE_CHESS_KNOWLEDGE}")
     if USE_CHESS_KNOWLEDGE:
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Opening book will be used for first moves")
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Endgame knowledge will assist in endgame positions")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Opening book: 500+ openings (Sicilian, Ruy Lopez, Italian, French, Caro-Kann, etc.)")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Tactics: 19 patterns (pins, forks, skewers, discovered attacks, etc.)")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Strategy: 40+ concepts (control center, develop pieces, king safety, etc.)")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Endgame: 31 principles (opposition, zugzwang, king activity, etc.)")
     
-    # Check for checkpoint
-    checkpoint_path = os.path.join(CHECKPOINT_DIR, 'self_play_latest_checkpoint.pt')
-    if os.path.exists(checkpoint_path):
-        response = input("\nFound existing self-play checkpoint. Load it? (y/n): ")
-        if response.lower() == 'y':
-            checkpoint = torch.load(checkpoint_path, weights_only=False)
+    # Check for self-play checkpoint to resume
+    self_play_checkpoint_path = os.path.join(CHECKPOINT_DIR, 'self_play_latest_checkpoint.pt')
+    start_epoch = 1
+    if os.path.exists(self_play_checkpoint_path):
+        try:
+            checkpoint = torch.load(self_play_checkpoint_path, weights_only=False)
             model.load_state_dict(checkpoint['model_state_dict'])
             trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             start_epoch = checkpoint['epoch'] + 1
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checkpoint loaded")
+            print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Loaded checkpoint from epoch {checkpoint['epoch']}")
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Resumed training from epoch {start_epoch}")
-        else:
-            start_epoch = 1
-    else:
-        start_epoch = 1
+        except Exception as e:
+            print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: Could not load checkpoint: {e}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting fresh training")
     
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting self-play training...")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
@@ -100,16 +113,25 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
         import threading
         from queue import Queue
         
+        def play_game_worker(game_id, worker, env, play_as_white, queue):
+            """Worker function for thread-safe game execution."""
+            try:
+                result = worker.play_game(env, play_as_white)
+                queue.put(result)
+            except Exception as e:
+                print(f"Error in game {game_id}: {e}")
+                queue.put(None)
+        
         results_queue = Queue()
         threads = []
-        env = ChessEnvironment()
         
         # Play games as white
         for i in range(num_white_games):
             worker = SelfPlayGameWorker(i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE)
             env_white = ChessEnvironment()
             thread = threading.Thread(
-                target=lambda w=worker, e=env_white: results_queue.put(w.play_game(e, play_as_white=True))
+                target=play_game_worker,
+                args=(i, worker, env_white, True, results_queue)
             )
             threads.append(thread)
             thread.start()
@@ -119,7 +141,8 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
             worker = SelfPlayGameWorker(num_white_games + i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE)
             env_black = ChessEnvironment()
             thread = threading.Thread(
-                target=lambda w=worker, e=env_black: results_queue.put(w.play_game(e, play_as_white=False))
+                target=play_game_worker,
+                args=(num_white_games + i, worker, env_black, False, results_queue)
             )
             threads.append(thread)
             thread.start()
@@ -201,7 +224,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
         
         # Save checkpoint every 10 epochs
         if epoch % 10 == 0:
-            trainer.save_checkpoint(checkpoint_path, epoch, {
+            trainer.save_checkpoint(self_play_checkpoint_path, epoch, {
                 'win_rate': win_rate,
                 'epoch': epoch
             })
