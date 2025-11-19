@@ -2,7 +2,7 @@
 
 # Training parameters
 NUM_PARALLEL_GAMES = 15  # Number of games to play simultaneously
-NUM_EPOCHS = 100000  # Maximum number of training epochs (will stop at 100% win rate)
+NUM_EPOCHS = 100000  # Maximum number of training epochs (will stop at 100.0 accuracy)
 LOOKAHEAD_MOVES = 18  # Number of moves to look ahead
 TARGET_WIN_RATE = 100.0  # Target win rate to stop training
 

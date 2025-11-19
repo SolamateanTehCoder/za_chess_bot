@@ -1,7 +1,7 @@
 """
 Self-play training where the model plays against itself.
-14 games: 7 as white, 7 as black
-Training stops when model reaches 100% win rate against itself.
+28 games: 14 as white, 14 as black
+Training stops when model reaches 100.0 accuracy (100% win rate against itself).
 """
 
 import torch
@@ -187,9 +187,9 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Results - Wins: {wins}, Draws: {draws}, Losses: {losses} (Timeouts: {timeouts})")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Win Rate: {win_rate:.1f}%")
         
-        # Check if model has achieved 100% win rate
+        # Check if model has achieved 100.0 accuracy
         if win_rate == 100.0:
-            print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] *** MODEL ACHIEVED 100% WIN RATE ***")
+            print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] *** MODEL ACHIEVED 100.0 ACCURACY (100% WIN RATE) ***")
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training complete!")
             
             # Save final checkpoint

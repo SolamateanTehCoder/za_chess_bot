@@ -28,7 +28,7 @@ A chess engine trained through reinforcement learning, starting with games again
   - Parallel multi-threaded games (28 simultaneously)
   - Automatic checkpoint saving every 10 epochs
 
-- **Target Goal**: Train until 100% win rate against itself
+- **Target Goal**: Train until 100.0 accuracy (100% win rate against itself)
 
 ## 📁 Project Structure
 
@@ -98,7 +98,7 @@ This will:
 2. Play 28 games per epoch (with 60-second time control per side)
 3. Train the model for 1 epoch
 4. Save checkpoints every 10 epochs
-5. Continue until reaching 100% win rate
+5. Continue until reaching 100.0 accuracy
 
 ### Run Stockfish Training (Optional)
 ```powershell
@@ -113,7 +113,7 @@ Edit `config.py` to customize:
 
 ```python
 # Self-play training
-NUM_EPOCHS = 100000              # Max epochs (stops at 100% win rate)
+NUM_EPOCHS = 100000              # Max epochs (stops at 100.0 accuracy)
 LEARNING_RATE = 0.001            # Learning rate for PPO
 BATCH_SIZE = 64                  # Training batch size
 
@@ -142,7 +142,7 @@ Training produces:
 - **Console Output**: Real-time game results and loss metrics
 - **Checkpoints**: Saved every 10 epochs in `checkpoints/`
 - **Charts**: Training progress visualizations in `plots/` (win rate, loss curves)
-- **Final Model**: `self_play_final_model.pt` when 100% win rate is achieved
+- **Final Model**: `self_play_final_model.pt` when 100.0 accuracy is achieved
 
 Example output:
 ```
@@ -230,7 +230,7 @@ Uses **PPO (Proximal Policy Optimization)**:
 1. ✅ Train against Stockfish (~1900 rating)
 2. ✅ Implement self-play with bullet time control
 3. ✅ Add comprehensive chess knowledge (openings, tactics, endgames)
-4. ⏳ Reach 100% win rate against itself
+4. ⏳ Reach 100.0 accuracy (100% win rate against itself)
 5. ⏳ Evaluate final model strength
 
 ## 📚 Chess Knowledge Included
@@ -279,4 +279,4 @@ Educational use only.
 
 **Current Status**: Self-play training in progress with bullet time control  
 **Latest Model**: `self_play_latest_checkpoint.pt`  
-**Target**: 100% self-play win rate
+**Target**: 100.0 accuracy (100% win rate against itself)
