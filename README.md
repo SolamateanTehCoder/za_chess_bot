@@ -136,6 +136,57 @@ Self-play training parameters (in `train_self_play.py`):
 - **Timeout penalty**: Counts as a loss
 - **Knowledge access**: Both players have access to 500+ openings, 19 tactics, 40+ strategies, 31 endgames
 
+## 🏆 Accuracy-Based Reward System (NEW!)
+
+The training now uses **Stockfish analysis** to provide intelligent, accuracy-based rewards:
+
+### How It Works:
+1. **Every move is analyzed by Stockfish** at depth 15
+2. **Accuracy score calculated** (0-100%) based on move quality
+3. **Reward assigned** based on accuracy:
+   - **+1.0**: Perfect move (best by Stockfish)
+   - **+0.5**: Good move
+   - **0.0**: Neutral move
+   - **-0.5**: Bad move
+   - **-1.0**: Blunder
+
+### Time Pressure Learning:
+- **1-second baseline** per move
+- **Extra time = pain penalty**: -0.001 per extra millisecond
+- Example: 2-second move = -1.0 penalty for time
+- **Effect**: Model learns to think faster under pressure
+
+### Real-Time Visualization:
+- **28 game boards displayed simultaneously** (7×4 grid)
+- **Green timer flash** = Model received reward (good move) ✓
+- **Red timer flash** = Model received pain penalty (bad move) ✗
+- **Accuracy % shown** for each side
+- **Win/Loss/Draw displayed** at end of game
+
+### Setting Up Rewards:
+
+**Option 1: Install Stockfish (Recommended)**
+```bash
+# Windows: Download from https://stockfishchess.org/download/
+# Place in C:\Program Files\Stockfish\
+
+# Linux:
+sudo apt-get install stockfish
+
+# macOS:
+brew install stockfish
+```
+
+**Option 2: Use Fallback Heuristics**
+System will automatically fall back to simpler reward logic if Stockfish is unavailable (still effective).
+
+### Running with Rewards:
+```powershell
+python run_training.py
+```
+
+See `REWARD_SYSTEM_GUIDE.md` for detailed documentation and troubleshooting.
+
 ## 📊 Training Progress
 
 Training produces:

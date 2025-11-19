@@ -2,6 +2,11 @@
 Self-play training where the model plays against itself.
 28 games: 14 as white, 14 as black
 Training stops when model reaches 100.0 accuracy (100% win rate against itself).
+
+Each move is analyzed by Stockfish for accuracy-based rewards:
+- Green timer flash = move received reward (good move)
+- Red timer flash = move received pain penalty (bad move)
+- Time penalty: 1 second baseline; each millisecond over incurs pain
 """
 
 import torch
@@ -17,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from model import ChessNet
 from chess_env import ChessEnvironment
 from trainer import ChessTrainer
+from stockfish_reward_analyzer import StockfishRewardAnalyzer
+from game_visualizer import launch_visualizer
 from config import (
     USE_CUDA, LEARNING_RATE, GAMMA, BATCH_SIZE, NUM_EPOCHS,
     CHECKPOINT_DIR, USE_CHESS_KNOWLEDGE
@@ -69,14 +76,33 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
     # Initialize trainer
     trainer = ChessTrainer(model, device=device, learning_rate=LEARNING_RATE)
     
+    # Initialize Stockfish reward analyzer
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing Stockfish reward analyzer...")
+    reward_analyzer = StockfishRewardAnalyzer(depth=15, timeout_ms=300)
+    if reward_analyzer.is_active:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✓ Stockfish analyzer active - accuracy-based rewards enabled")
+    else:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠ Using fallback heuristic rewards (Stockfish not available)")
+    
+    # Launch game visualizer
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Launching real-time game visualizer...")
+    try:
+        visualizer = launch_visualizer(num_games=num_white_games + num_black_games)
+        visualizer.set_status("Waiting for epoch to start...")
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: Could not launch visualizer: {e}")
+        visualizer = None
+    
     # Training configuration
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training Configuration:")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Self-play games per epoch: {num_white_games + num_black_games} (Bullet: 60s per side)")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Games as white: {num_white_games}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Games as black: {num_black_games}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Time control: 60 seconds per player (timeout = loss)")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Max epochs: {max_epochs}")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Games as black: {num_black_games}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Move time baseline: 1 second (pain penalty per extra millisecond)")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Reward system:")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Green flash = move reward (good move by Stockfish analysis)")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Red flash = move pain penalty (bad move, accuracy loss)")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Max epochs: {max_epochs}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Learning rate: {LEARNING_RATE}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Chess knowledge enabled: {USE_CHESS_KNOWLEDGE}")
@@ -115,6 +141,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         from self_play_opponent import SelfPlayGameWorker
         import threading
         from queue import Queue
+        import time as time_module
         
         def play_game_worker(game_id, worker, env, play_as_white, queue):
             """Worker function for thread-safe game execution."""
@@ -127,10 +154,11 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         
         results_queue = Queue()
         threads = []
+        game_start_time = time_module.time()
         
         # Play games as white
         for i in range(num_white_games):
-            worker = SelfPlayGameWorker(i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE)
+            worker = SelfPlayGameWorker(i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE, reward_analyzer=reward_analyzer)
             env_white = ChessEnvironment()
             thread = threading.Thread(
                 target=play_game_worker,
@@ -141,7 +169,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         
         # Play games as black
         for i in range(num_black_games):
-            worker = SelfPlayGameWorker(num_white_games + i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE)
+            worker = SelfPlayGameWorker(num_white_games + i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE, reward_analyzer=reward_analyzer)
             env_black = ChessEnvironment()
             thread = threading.Thread(
                 target=play_game_worker,
@@ -150,9 +178,11 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
             threads.append(thread)
             thread.start()
         
-        # Wait for all games to complete
+        # Wait for all games to complete, updating visualizer
         for thread in threads:
             thread.join()
+        
+        game_elapsed = time_module.time() - game_start_time
         
         # Collect results
         all_experiences = []
@@ -161,11 +191,20 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         draws = 0
         timeouts = 0
         total_moves = 0
+        all_white_accuracies = []
+        all_black_accuracies = []
         
         while not results_queue.empty():
             game_result = results_queue.get()
+            if game_result is None:
+                continue
+            
             all_experiences.extend(game_result['experiences'])
             total_moves += game_result['moves']
+            
+            # Collect accuracies
+            all_white_accuracies.extend(game_result.get('white_accuracies', []))
+            all_black_accuracies.extend(game_result.get('black_accuracies', []))
             
             # Count result - timeout counts as a loss
             if game_result.get('timeout', False):
@@ -180,12 +219,20 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         
         games_played = wins + losses + draws
         win_rate = (wins / games_played * 100) if games_played > 0 else 0
+        avg_white_accuracy = np.mean(all_white_accuracies) if all_white_accuracies else 0.0
+        avg_black_accuracy = np.mean(all_black_accuracies) if all_black_accuracies else 0.0
         
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Games completed")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Games completed in {game_elapsed:.1f}s")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Games played: {games_played}")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Total moves: {total_moves}")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Results - Wins: {wins}, Draws: {draws}, Losses: {losses} (Timeouts: {timeouts})")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Win Rate: {win_rate:.1f}%")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Move Accuracy - White: {avg_white_accuracy:.1f}%, Black: {avg_black_accuracy:.1f}%")
+        
+        # Update visualizer
+        if visualizer:
+            visualizer.set_epoch(epoch)
+            visualizer.set_status(f"Epoch {epoch} | Win Rate: {win_rate:.1f}% | Accuracy: W:{avg_white_accuracy:.1f}% B:{avg_black_accuracy:.1f}% | Games: {games_played}")
         
         # Check if model has achieved 100.0 accuracy
         if win_rate == 100.0:
@@ -239,11 +286,17 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Epoch {epoch} completed")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
+    
+    # Cleanup
+    if reward_analyzer:
+        reward_analyzer.close()
+    if visualizer:
+        visualizer.stop()
 
 
 if __name__ == "__main__":
     run_self_play_training(
         max_epochs=100000,
-        num_white_games=7,
-        num_black_games=7
+        num_white_games=14,
+        num_black_games=14
     )

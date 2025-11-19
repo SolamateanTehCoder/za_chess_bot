@@ -1,9 +1,10 @@
-"""Self-play opponent - the model plays against itself."""
+"""Self-play opponent - the model plays against itself with Stockfish-based accuracy rewards."""
 import chess
 import torch
 import numpy as np
 from typing import Tuple, Optional
 import time
+from stockfish_reward_analyzer import StockfishRewardAnalyzer
 
 
 class SelfPlayOpponent:
@@ -12,7 +13,7 @@ class SelfPlayOpponent:
     No external engine needed - uses the same neural network.
     """
     
-    def __init__(self, model, device='cpu', temperature=1.0):
+    def __init__(self, model, device='cuda', temperature=1.0):
         """
         Initialize self-play opponent.
         
@@ -73,7 +74,7 @@ class SelfPlayGameWorker:
     Worker for self-play games where the model plays against itself.
     """
     
-    def __init__(self, game_id, model, device, use_knowledge=True):
+    def __init__(self, game_id, model, device, use_knowledge=True, reward_analyzer=None):
         """
         Initialize self-play game worker.
         
@@ -82,6 +83,7 @@ class SelfPlayGameWorker:
             model: Neural network model
             device: Device to run on
             use_knowledge: Whether to use chess knowledge
+            reward_analyzer: StockfishRewardAnalyzer instance for move accuracy
         """
         self.game_id = game_id
         self.model = model
@@ -89,9 +91,15 @@ class SelfPlayGameWorker:
         self.use_knowledge = use_knowledge
         self.opponent = SelfPlayOpponent(model, device)
         self.temperature = 1.0  # For move selection
+        self.reward_analyzer = reward_analyzer
         
         # Track game as tuple (move, player)
         self.move_history = []
+        
+        # Track move timing and accuracy
+        self.move_times = []  # ms per move
+        self.move_accuracies = []  # accuracy score per move
+        self.move_rewards = []  # reward/penalty per move
     
     def get_move_from_network(self, board, legal_moves_mask):
         """Get move from neural network."""
@@ -116,32 +124,43 @@ class SelfPlayGameWorker:
     def play_game(self, env, play_as_white):
         """
         Play a self-play game with bullet time control (60 seconds per side).
+        Each move has a 1-second baseline; excess time incurs pain penalty.
+        Stockfish analyzes each move for accuracy-based rewards.
         
         Args:
             env: Chess environment
             play_as_white: Whether this instance plays as white
             
         Returns:
-            Game result tuple (result, moves_count, experiences, times_exceeded)
+            Game result dict with experiences, timing, and accuracy data
         """
         from chess_env import ChessEnvironment
         from comprehensive_chess_knowledge import ComprehensiveChessKnowledge
         
-        env.reset()  # Reset environment to get fresh board
+        env.reset()
         game_knowledge = ComprehensiveChessKnowledge() if self.use_knowledge else None
         
-        experiences = []  # List of (state, action, reward, value, log_prob) tuples
+        experiences = []
         self.move_history = []
+        self.move_times = []
+        self.move_accuracies = []
+        self.move_rewards = []
         
         move_count = 0
         max_moves = 200
         
         # Bullet time control: 60 seconds per player
-        time_limit = 60.0  # seconds
+        time_limit = 60.0
         white_time = time_limit
         black_time = time_limit
         last_move_time = time.time()
         times_exceeded = {'white': False, 'black': False}
+        
+        # Track move accuracies for both sides
+        white_accuracies = []
+        black_accuracies = []
+        white_rewards = []
+        black_rewards = []
         
         while not env.board.is_game_over() and move_count < max_moves:
             current_time = time.time()
@@ -152,32 +171,47 @@ class SelfPlayGameWorker:
                 white_time -= elapsed
                 if white_time <= 0:
                     times_exceeded['white'] = True
-                    result = "Loss" if play_as_white else "Win"  # Timeout is a loss
+                    result = "Loss" if play_as_white else "Win"
                     return {
                         'result': result,
                         'moves': move_count,
                         'experiences': experiences,
                         'move_history': self.move_history,
                         'timeout': True,
-                        'time_exceeded': times_exceeded
+                        'time_exceeded': times_exceeded,
+                        'white_accuracies': white_accuracies,
+                        'black_accuracies': black_accuracies,
+                        'white_rewards': white_rewards,
+                        'black_rewards': black_rewards,
+                        'move_times': self.move_times,
+                        'avg_white_accuracy': np.mean(white_accuracies) if white_accuracies else 0.0,
+                        'avg_black_accuracy': np.mean(black_accuracies) if black_accuracies else 0.0,
                     }
             else:
                 black_time -= elapsed
                 if black_time <= 0:
                     times_exceeded['black'] = True
-                    result = "Loss" if not play_as_white else "Win"  # Timeout is a loss
+                    result = "Loss" if not play_as_white else "Win"
                     return {
                         'result': result,
                         'moves': move_count,
                         'experiences': experiences,
                         'move_history': self.move_history,
                         'timeout': True,
-                        'time_exceeded': times_exceeded
+                        'time_exceeded': times_exceeded,
+                        'white_accuracies': white_accuracies,
+                        'black_accuracies': black_accuracies,
+                        'white_rewards': white_rewards,
+                        'black_rewards': black_rewards,
+                        'move_times': self.move_times,
+                        'avg_white_accuracy': np.mean(white_accuracies) if white_accuracies else 0.0,
+                        'avg_black_accuracy': np.mean(black_accuracies) if black_accuracies else 0.0,
                     }
             
             last_move_time = current_time
             
             is_ai_turn = (env.board.turn == chess.WHITE) == play_as_white
+            move_start_time = time.time()
             
             if is_ai_turn:
                 # Get board state
@@ -204,24 +238,51 @@ class SelfPlayGameWorker:
                     move = np.random.choice(legal_moves)
                     move_idx = env.move_to_index(move)
                 
+                # Measure move time
+                move_time_ms = (time.time() - move_start_time) * 1000
+                self.move_times.append(move_time_ms)
+                
+                # Get Stockfish analysis for accuracy
+                accuracy_result = {}
+                if self.reward_analyzer:
+                    accuracy_result = self.reward_analyzer.analyze_move(env.board, move, move_time_ms)
+                
+                accuracy = accuracy_result.get('accuracy', 50.0)
+                stockfish_reward = accuracy_result.get('reward', 0.0)
+                
                 # Make the move
-                next_state, reward, done, info = env.step(move)
+                next_state, env_reward, done, info = env.step(move)
+                
+                # Combine environment reward with accuracy-based reward
+                combined_reward = stockfish_reward
                 
                 # Get log probability
                 log_probs = torch.log_softmax(policy, dim=0)
                 log_prob = log_probs[move_idx]
                 
-                # Store experience
+                # Store experience with accuracy-based reward
                 experiences.append({
                     'state': state_tensor.cpu(),
                     'action': move_idx,
-                    'reward': reward,
+                    'reward': combined_reward,
                     'value': value.item(),
                     'log_prob': log_prob.item(),
-                    'source': move_source
+                    'source': move_source,
+                    'accuracy': accuracy,
+                    'move_time_ms': move_time_ms,
+                    'stockfish_analysis': accuracy_result
                 })
                 
                 self.move_history.append((move, f"AI-{move_source}"))
+                self.move_accuracies.append(accuracy)
+                self.move_rewards.append(combined_reward)
+                
+                if env.board.turn == chess.BLACK:  # Just moved as white
+                    white_accuracies.append(accuracy)
+                    white_rewards.append(combined_reward)
+                else:  # Moved as black
+                    black_accuracies.append(accuracy)
+                    black_rewards.append(combined_reward)
             
             else:
                 # Opponent's turn (also using neural network)
@@ -233,7 +294,6 @@ class SelfPlayGameWorker:
                 move = env.index_to_move(move_idx)
                 move_source = "self_play"
                 
-                # Check for opening book
                 if game_knowledge:
                     knowledge_move, source = game_knowledge.get_assisted_move(env.board)
                     if knowledge_move:
@@ -245,8 +305,25 @@ class SelfPlayGameWorker:
                     legal_moves = list(env.board.legal_moves)
                     move = np.random.choice(legal_moves)
                 
+                # Measure opponent move time
+                move_time_ms = (time.time() - move_start_time) * 1000
+                self.move_times.append(move_time_ms)
+                
+                # Get Stockfish analysis for opponent move
+                accuracy_result = {}
+                if self.reward_analyzer:
+                    accuracy_result = self.reward_analyzer.analyze_move(env.board, move, move_time_ms)
+                
+                accuracy = accuracy_result.get('accuracy', 50.0)
+                
                 next_state, reward, done, info = env.step(move)
                 self.move_history.append((move, f"Opponent-{move_source}"))
+                self.move_accuracies.append(accuracy)
+                
+                if env.board.turn == chess.WHITE:  # Just moved as black
+                    black_accuracies.append(accuracy)
+                else:  # Opponent moved as white
+                    white_accuracies.append(accuracy)
             
             move_count += 1
         
@@ -256,7 +333,7 @@ class SelfPlayGameWorker:
         elif env.board.is_stalemate() or env.board.is_insufficient_material() or env.board.is_repetition() or env.board.is_fivefold_repetition():
             result = "Draw"
         else:
-            result = "Draw"  # Max moves reached
+            result = "Draw"
         
         return {
             'result': result,
@@ -264,5 +341,12 @@ class SelfPlayGameWorker:
             'experiences': experiences,
             'move_history': self.move_history,
             'timeout': False,
-            'time_exceeded': times_exceeded
+            'time_exceeded': times_exceeded,
+            'white_accuracies': white_accuracies,
+            'black_accuracies': black_accuracies,
+            'white_rewards': white_rewards,
+            'black_rewards': black_rewards,
+            'move_times': self.move_times,
+            'avg_white_accuracy': np.mean(white_accuracies) if white_accuracies else 0.0,
+            'avg_black_accuracy': np.mean(black_accuracies) if black_accuracies else 0.0,
         }
