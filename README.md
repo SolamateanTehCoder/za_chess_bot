@@ -1,171 +1,282 @@
-# Chess Engine with Reinforcement Learning
+# Za Chess Bot - Reinforcement Learning Chess Engine
 
-A chess engine that learns to play chess through reinforcement learning by playing against Stockfish.
+A chess engine trained through reinforcement learning, starting with games against Stockfish and continuing through self-play with bullet time control (1 minute per side).
 
-## Features
+## 🎯 Key Features
 
-- **Deep Neural Network**: ResNet-style architecture with policy and value heads
-- **Reinforcement Learning**: PPO (Proximal Policy Optimization) algorithm
-- **Parallel Training**: Plays 15 games simultaneously using multi-threading
-- **GPU Acceleration**: CUDA support for faster training
-- **Move Lookahead**: Evaluates positions up to 18 moves ahead
-- **Checkpoint System**: Save and resume training at any time
-- **Comprehensive Charts**: Automatic generation of training progress charts including:
-  - Win/Draw/Loss rates over time
-  - Policy, Value, and Total loss curves
-  - Moving average win rate (smoothed)
-- **Automatic Stopping**: Training stops when 100% win rate is achieved
+- **Two-Stage Training**:
+  - Stage 1: Reinforcement learning against Stockfish (~1900 rating)
+  - Stage 2: Self-play training with 28 games per epoch (14 white, 14 black)
+  
+- **Bullet Time Control**: 60 seconds per player - timeout counts as a loss, teaching the model to think faster
 
-## Project Structure
+- **Comprehensive Chess Knowledge**: Both players have access to:
+  - 500+ opening variations (Sicilian, Ruy Lopez, Italian, French, Caro-Kann, etc.)
+  - 19 tactical patterns (pins, forks, skewers, discovered attacks, knight forks, etc.)
+  - 40+ strategic concepts (control center, piece development, king safety, etc.)
+  - 31 endgame principles (opposition, zugzwang, king activity, etc.)
+
+- **Deep Neural Network**: 
+  - ResNet-style architecture with 10 residual blocks
+  - 512 hidden channels
+  - ~58M trainable parameters
+  - Separate policy (move selection) and value (position evaluation) heads
+
+- **Advanced Training**:
+  - PPO (Proximal Policy Optimization) algorithm
+  - GPU-accelerated game playing with CUDA
+  - Parallel multi-threaded games (28 simultaneously)
+  - Automatic checkpoint saving every 10 epochs
+
+- **Target Goal**: Train until 100% win rate against itself
+
+## 📁 Project Structure
 
 ```
 Za Chess Bot/
-├── train.py                 # Main training script
-├── model.py                 # Neural network architecture
-├── chess_env.py             # Chess environment and board encoding
-├── stockfish_opponent.py    # Stockfish integration
-├── parallel_player.py       # Multi-threaded game player
-├── trainer.py               # Training logic (PPO)
-├── utils.py                 # Utility functions and chart generation
-├── config.py                # Configuration parameters
-├── test_engine.py           # Testing and playing against the AI
-├── requirements.txt         # Python dependencies
-├── checkpoints/             # Saved model checkpoints
-├── plots/                   # Training progress charts
-└── README.md               # This file
+├── train.py                        # Original Stockfish training script
+├── train_self_play.py              # Self-play training script (main)
+├── model.py                        # Neural network architecture (ChessNet)
+├── chess_env.py                    # Chess environment and board encoding
+├── trainer.py                      # PPO training implementation
+├── self_play_opponent.py           # Self-play game logic with time control
+├── stockfish_opponent.py           # Stockfish opponent integration
+├── parallel_player.py              # Multi-threaded parallel game player
+├── comprehensive_chess_knowledge.py # Opening book, tactics, strategy, endgames
+├── config.py                       # Configuration parameters
+├── utils.py                        # Utility functions
+├── requirements.txt                # Python dependencies
+├── checkpoints/                    # Saved model checkpoints
+│   ├── latest_checkpoint.pt        # Stockfish-trained model
+│   ├── self_play_latest_checkpoint.pt  # Latest self-play checkpoint
+│   └── self_play_final_model.pt    # Final 100% model (when achieved)
+├── plots/                          # Training progress charts
+└── README.md                       # This file
 ```
 
-## Installation
+## ⚙️ Installation
 
-### 1. Install Python Dependencies
+### 1. Clone Repository
+```powershell
+git clone https://github.com/SolamateanTehCoder/za_chess_bot.git
+cd za_chess_bot
+```
 
+### 2. Install Dependencies
 ```powershell
 pip install -r requirements.txt
 ```
 
-### 2. Install Stockfish
+Required packages:
+- PyTorch (with CUDA support recommended)
+- python-chess 1.999
+- NumPy
+- Matplotlib (for charts)
 
-Download Stockfish from: https://stockfishchess.org/download/
+### 3. Download Stockfish (for continuing Stockfish training)
+Download from: https://stockfishchess.org/download/
 
-Extract the executable and update the `STOCKFISH_PATH` in `config.py` to point to the `stockfish.exe` file.
-
-Example:
+Update `STOCKFISH_PATH` in `config.py`:
 ```python
-STOCKFISH_PATH = "C:/path/to/stockfish/stockfish.exe"
+STOCKFISH_PATH = "C:\\path\\to\\stockfish\\stockfish.exe"
 ```
 
-### 3. Verify CUDA (Optional, for GPU training)
-
-If you have an NVIDIA GPU and want to use CUDA:
-
+### 4. Verify CUDA (Optional)
 ```powershell
-python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')"
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ```
 
-## Configuration
+## 🚀 Quick Start
 
-Edit `config.py` to customize training parameters:
+### Run Self-Play Training (Recommended)
+```powershell
+python train_self_play.py
+```
 
-- `NUM_PARALLEL_GAMES`: Number of games to play simultaneously (default: 15)
-- `NUM_EPOCHS`: Maximum training epochs (default: 100000)
-- `TARGET_WIN_RATE`: Target win rate to stop training (default: 100.0%)
-- `LOOKAHEAD_MOVES`: Move lookahead depth (default: 18)
-- `STOCKFISH_SKILL_LEVEL`: Stockfish difficulty 0-20 (default: 20)
-- `STOCKFISH_DEPTH`: Stockfish search depth (default: 18)
-- `LEARNING_RATE`: Learning rate for training (default: 0.001)
-- `USE_CUDA`: Enable/disable GPU training (default: True)
-- `SAVE_FREQUENCY`: Save checkpoint every N epochs (default: 10)
+This will:
+1. Load the Stockfish-trained model as the base
+2. Play 28 games per epoch (with 60-second time control per side)
+3. Train the model for 1 epoch
+4. Save checkpoints every 10 epochs
+5. Continue until reaching 100% win rate
 
-## Usage
-
-### Start Training
-
+### Run Stockfish Training (Optional)
 ```powershell
 python train.py
 ```
 
-The training process:
-1. Plays 15 games against Stockfish in parallel
-2. Collects experience from all games
-3. Trains the neural network for 1 epoch
-4. Records win/loss/draw statistics
-5. Saves checkpoints and generates charts every 10 epochs
-6. Automatically stops when 100% win rate is achieved
-7. Repeats until target is reached or max epochs
+This trains the initial model against Stockfish. Use this to restart training from scratch.
 
-### Resume Training
+## ⚙️ Configuration
 
-If training is interrupted, simply run `train.py` again and choose to load the latest checkpoint when prompted.
+Edit `config.py` to customize:
 
-### Monitor Progress
+```python
+# Self-play training
+NUM_EPOCHS = 100000              # Max epochs (stops at 100% win rate)
+LEARNING_RATE = 0.001            # Learning rate for PPO
+BATCH_SIZE = 64                  # Training batch size
 
-Training logs are saved to `training.log` and printed to the console in real-time.
+# Neural network
+HIDDEN_SIZE = 512                # Channels in residual blocks
+NUM_RESIDUAL_BLOCKS = 10         # Number of residual blocks
+USE_CHESS_KNOWLEDGE = True       # Enable opening book, tactics, endgames
 
-**Checkpoints** are saved every 10 epochs in the `checkpoints/` directory.
+# Hardware
+USE_CUDA = True                  # Enable GPU training
+CHECKPOINT_DIR = "checkpoints"   # Checkpoint save directory
+SAVE_FREQUENCY = 10              # Save checkpoint every N epochs
+```
 
-**Training charts** are automatically generated in the `plots/` directory every 10 epochs, showing:
-- Win/Draw/Loss rates over time
-- Win rate progress toward 100% target
-- Policy loss, Value loss, and Total loss
-- Smoothed win rate (moving average)
+## 🎮 Game Configuration
 
-When the AI achieves 100% win rate, training automatically stops and saves a final model as `final_model_100percent.pt`.
+Self-play training parameters (in `train_self_play.py`):
+- **Games per epoch**: 28 (14 white, 14 black)
+- **Time control**: 60 seconds per player (bullet)
+- **Timeout penalty**: Counts as a loss
+- **Knowledge access**: Both players have access to 500+ openings, 19 tactics, 40+ strategies, 31 endgames
 
-## How It Works
+## 📊 Training Progress
 
-### 1. Board Encoding
-The chess board is encoded as a 119-channel 8x8 tensor containing:
-- Piece positions (12 channels: 6 pieces × 2 colors)
-- Game state information (castling rights, en passant, move count)
+Training produces:
+- **Console Output**: Real-time game results and loss metrics
+- **Checkpoints**: Saved every 10 epochs in `checkpoints/`
+- **Charts**: Training progress visualizations in `plots/` (win rate, loss curves)
+- **Final Model**: `self_play_final_model.pt` when 100% win rate is achieved
+
+Example output:
+```
+[2025-11-18 21:06:15] EPOCH 11/100000
+[2025-11-18 21:06:15] Phase 1: Playing self-play games...
+[2025-11-18 21:10:45] Games completed
+[2025-11-18 21:10:45]   Games played: 28
+[2025-11-18 21:10:45]   Total moves: 5234
+[2025-11-18 21:10:45]   Results - Wins: 8, Draws: 18, Losses: 2 (Timeouts: 0)
+[2025-11-18 21:10:45]   Win Rate: 28.6%
+[2025-11-18 21:10:45] Phase 2: Training neural network...
+```
+
+## 🧠 Neural Network Architecture
+
+**Input**: 119×8×8 tensor encoding:
+- Piece positions (12 channels: 6 types × 2 colors)
+- Game state (castling rights, en passant, move count)
 - Move history
 
-### 2. Neural Network
-- **Input**: 119×8×8 board representation
-- **Body**: ResNet-style with 10 residual blocks
-- **Policy Head**: Outputs probability distribution over 4,672 possible moves
-- **Value Head**: Outputs position evaluation (-1 to +1)
+**Architecture**:
+```
+Input (119, 8, 8)
+    ↓
+Conv + BatchNorm + ReLU (512 channels)
+    ↓
+10× Residual Blocks (512 channels each)
+    ↓
+┌─────────────────────┬─────────────────────┐
+│   Policy Head       │   Value Head        │
+├─────────────────────┼─────────────────────┤
+│ Conv (512→32)       │ Conv (512→32)       │
+│ FC (2048→4672)      │ FC (2048→256)       │
+│ Log-softmax         │ FC (256→1)          │
+│ (Move probs)        │ Tanh ([-1, 1])      │
+└─────────────────────┴─────────────────────┘
+     ↓                      ↓
+  4672 moves           Position value
+```
 
-### 3. Training Algorithm (PPO)
-- Plays multiple games to collect experience
-- Calculates discounted returns and advantages
-- Updates policy using clipped objective function
-- Updates value function to better predict game outcomes
+**Total Parameters**: ~57.9M
 
-### 4. Parallel Game Playing
-- 10 games run simultaneously in separate threads
-- Each game alternates between AI and Stockfish moves
-- Experience from all games is aggregated for training
+## 🎓 Training Algorithm
 
-## Performance Notes
+Uses **PPO (Proximal Policy Optimization)**:
 
-- **GPU Training**: Significantly faster with CUDA-enabled GPU
-- **Training Time**: Each epoch takes ~5-15 minutes depending on hardware
-- **Memory Usage**: ~2-4 GB GPU memory, ~4-8 GB system RAM
-- **Convergence**: Meaningful improvement typically seen after 100+ epochs
+1. **Self-Play**: Play 28 games with time control
+2. **Experience Collection**: Record states, actions, rewards, log probabilities
+3. **Advantage Calculation**: Compute returns and advantages
+4. **Policy Update**: Update with clipped objective
+5. **Value Update**: MSE loss on position evaluation
+6. **Repeat**: Next epoch with improved model
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
-### Stockfish Not Found
-Make sure `STOCKFISH_PATH` in `config.py` points to the correct executable.
+### Training is slow
+- Ensure CUDA is properly set up: `python -c "import torch; print(torch.cuda.is_available())"`
+- Reduce `BATCH_SIZE` in config.py
+- Check GPU memory usage
 
-### CUDA Out of Memory
-- Reduce `BATCH_SIZE` in `config.py`
-- Reduce `NUM_RESIDUAL_BLOCKS` or `HIDDEN_SIZE` in `config.py`
-- Set `USE_CUDA = False` to train on CPU
+### Out of VRAM
+- Reduce `HIDDEN_SIZE` from 512 to 256
+- Reduce `NUM_RESIDUAL_BLOCKS` from 10 to 6-8
+- Reduce `BATCH_SIZE` from 64 to 32
 
-### Slow Training
-- Ensure CUDA is properly configured
-- Reduce `NUM_PARALLEL_GAMES` if system resources are limited
-- Lower `STOCKFISH_DEPTH` for faster opponent moves
+### Timeouts not working
+- Check system clock is accurate
+- Ensure timer logic in `self_play_opponent.py` is enabled
+- Verify `USE_CHESS_KNOWLEDGE = True` in config.py
 
-## Future Improvements
+### Model not improving
+- Ensure checkpoint is loading correctly
+- Check that `USE_CHESS_KNOWLEDGE = True`
+- Verify training data is being collected (check epoch results)
 
-- Implement full Monte Carlo Tree Search (MCTS)
-- Add self-play training (AI vs AI)
-- Implement opening book
-- Add evaluation metrics and ELO rating
-- Support for distributed training across multiple machines
+## 📈 Performance Notes
 
-## License
+- **Hardware**: NVIDIA GTX 1650 or better recommended
+- **Per Epoch Time**: ~3-5 minutes (with 28 games and CUDA)
+- **Memory**: ~2GB GPU VRAM, ~4GB system RAM
+- **Training Duration**: 100-500+ epochs to reach convergence
 
-This project is for educational purposes.
+## 🎯 Project Goals
+
+1. ✅ Train against Stockfish (~1900 rating)
+2. ✅ Implement self-play with bullet time control
+3. ✅ Add comprehensive chess knowledge (openings, tactics, endgames)
+4. ⏳ Reach 100% win rate against itself
+5. ⏳ Evaluate final model strength
+
+## 📚 Chess Knowledge Included
+
+**Openings** (500+):
+- Sicilian Defense (Open, Closed, Najdorf, Dragon, etc.)
+- Ruy Lopez (Spanish)
+- Italian Game
+- French Defense
+- Caro-Kann Defense
+- And many more...
+
+**Tactics** (19 patterns):
+- Pins, Forks, Skewers
+- Discovered Attacks
+- Double Attacks
+- Knight Forks
+- Removing Defenders
+- And more...
+
+**Strategy** (40+ concepts):
+- Control the center
+- Develop pieces quickly
+- King safety (castling early)
+- Piece activity and coordination
+- Pawn structure
+- And more...
+
+**Endgames** (31 principles):
+- Opposition and key squares
+- Zugzwang
+- King activity
+- Pawn promotion techniques
+- Rook and pawn endgames
+- And more...
+
+## 🤝 Contributing
+
+This is a personal learning project. Feel free to fork and experiment!
+
+## 📄 License
+
+Educational use only.
+
+---
+
+**Current Status**: Self-play training in progress with bullet time control  
+**Latest Model**: `self_play_latest_checkpoint.pt`  
+**Target**: 100% self-play win rate

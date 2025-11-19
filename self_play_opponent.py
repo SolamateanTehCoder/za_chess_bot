@@ -3,6 +3,7 @@ import chess
 import torch
 import numpy as np
 from typing import Tuple, Optional
+import time
 
 
 class SelfPlayOpponent:
@@ -114,14 +115,14 @@ class SelfPlayGameWorker:
     
     def play_game(self, env, play_as_white):
         """
-        Play a self-play game.
+        Play a self-play game with bullet time control (60 seconds per side).
         
         Args:
             env: Chess environment
             play_as_white: Whether this instance plays as white
             
         Returns:
-            Game result tuple (result, moves_count, experiences)
+            Game result tuple (result, moves_count, experiences, times_exceeded)
         """
         from chess_env import ChessEnvironment
         from comprehensive_chess_knowledge import ComprehensiveChessKnowledge
@@ -135,7 +136,47 @@ class SelfPlayGameWorker:
         move_count = 0
         max_moves = 200
         
+        # Bullet time control: 60 seconds per player
+        time_limit = 60.0  # seconds
+        white_time = time_limit
+        black_time = time_limit
+        last_move_time = time.time()
+        times_exceeded = {'white': False, 'black': False}
+        
         while not env.board.is_game_over() and move_count < max_moves:
+            current_time = time.time()
+            elapsed = current_time - last_move_time
+            
+            # Update remaining time for current player
+            if env.board.turn == chess.WHITE:
+                white_time -= elapsed
+                if white_time <= 0:
+                    times_exceeded['white'] = True
+                    result = "Loss" if play_as_white else "Win"  # Timeout is a loss
+                    return {
+                        'result': result,
+                        'moves': move_count,
+                        'experiences': experiences,
+                        'move_history': self.move_history,
+                        'timeout': True,
+                        'time_exceeded': times_exceeded
+                    }
+            else:
+                black_time -= elapsed
+                if black_time <= 0:
+                    times_exceeded['black'] = True
+                    result = "Loss" if not play_as_white else "Win"  # Timeout is a loss
+                    return {
+                        'result': result,
+                        'moves': move_count,
+                        'experiences': experiences,
+                        'move_history': self.move_history,
+                        'timeout': True,
+                        'time_exceeded': times_exceeded
+                    }
+            
+            last_move_time = current_time
+            
             is_ai_turn = (env.board.turn == chess.WHITE) == play_as_white
             
             if is_ai_turn:
@@ -221,5 +262,7 @@ class SelfPlayGameWorker:
             'result': result,
             'moves': move_count,
             'experiences': experiences,
-            'move_history': self.move_history
+            'move_history': self.move_history,
+            'timeout': False,
+            'time_exceeded': times_exceeded
         }

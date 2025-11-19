@@ -23,7 +23,7 @@ from config import (
 )
 
 
-def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games=7):
+def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_games=14):
     """
     Run self-play training where model plays against itself.
     
@@ -71,8 +71,11 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
     
     # Training configuration
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training Configuration:")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Self-play games per epoch: {num_white_games + num_black_games}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Self-play games per epoch: {num_white_games + num_black_games} (Bullet: 60s per side)")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Games as white: {num_white_games}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Games as black: {num_black_games}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Time control: 60 seconds per player (timeout = loss)")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Max epochs: {max_epochs}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Games as black: {num_black_games}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Max epochs: {max_epochs}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Learning rate: {LEARNING_RATE}")
@@ -156,6 +159,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
         wins = 0
         losses = 0
         draws = 0
+        timeouts = 0
         total_moves = 0
         
         while not results_queue.empty():
@@ -163,7 +167,11 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
             all_experiences.extend(game_result['experiences'])
             total_moves += game_result['moves']
             
-            if game_result['result'] == 'Win':
+            # Count result - timeout counts as a loss
+            if game_result.get('timeout', False):
+                timeouts += 1
+                losses += 1
+            elif game_result['result'] == 'Win':
                 wins += 1
             elif game_result['result'] == 'Loss':
                 losses += 1
@@ -176,7 +184,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=7, num_black_games
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Games completed")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Games played: {games_played}")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Total moves: {total_moves}")
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Results - Wins: {wins}, Draws: {draws}, Losses: {losses}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Results - Wins: {wins}, Draws: {draws}, Losses: {losses} (Timeouts: {timeouts})")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Win Rate: {win_rate:.1f}%")
         
         # Check if model has achieved 100% win rate
