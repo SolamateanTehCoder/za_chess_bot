@@ -121,7 +121,7 @@ class SelfPlayGameWorker:
             
             return move_idx, policy, value
     
-    def play_game(self, env, play_as_white):
+    def play_game(self, env, play_as_white, visualizer=None, game_id=None):
         """
         Play a self-play game with bullet time control (60 seconds per side).
         Each move has a 1-second baseline; excess time incurs pain penalty.
@@ -130,6 +130,8 @@ class SelfPlayGameWorker:
         Args:
             env: Chess environment
             play_as_white: Whether this instance plays as white
+            visualizer: Optional visualizer to display moves in real-time
+            game_id: Game ID for visualizer updates
             
         Returns:
             Game result dict with experiences, timing, and accuracy data
@@ -253,6 +255,10 @@ class SelfPlayGameWorker:
                 # Make the move
                 next_state, env_reward, done, info = env.step(move)
                 
+                # Note: Visualizer updates disabled for stability
+                # Training runs in background threads, visualizer needs main thread
+                # Use standalone game_visualizer_simple.py if visualization needed
+                
                 # Combine environment reward with accuracy-based reward
                 combined_reward = stockfish_reward
                 
@@ -319,6 +325,9 @@ class SelfPlayGameWorker:
                 next_state, reward, done, info = env.step(move)
                 self.move_history.append((move, f"Opponent-{move_source}"))
                 self.move_accuracies.append(accuracy)
+                
+                # Note: Visualizer updates disabled - threading incompatible with background game threads
+                # See notes in train_self_play.py for details
                 
                 if env.board.turn == chess.WHITE:  # Just moved as black
                     black_accuracies.append(accuracy)

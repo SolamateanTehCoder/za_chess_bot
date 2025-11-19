@@ -23,7 +23,6 @@ from model import ChessNet
 from chess_env import ChessEnvironment
 from trainer import ChessTrainer
 from stockfish_reward_analyzer import StockfishRewardAnalyzer
-from game_visualizer import launch_visualizer
 from config import (
     USE_CUDA, LEARNING_RATE, GAMMA, BATCH_SIZE, NUM_EPOCHS,
     CHECKPOINT_DIR, USE_CHESS_KNOWLEDGE
@@ -77,21 +76,19 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
     trainer = ChessTrainer(model, device=device, learning_rate=LEARNING_RATE)
     
     # Initialize Stockfish reward analyzer
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing Stockfish reward analyzer...")
-    reward_analyzer = StockfishRewardAnalyzer(depth=15, timeout_ms=300)
-    if reward_analyzer.is_active:
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✓ Stockfish analyzer active - accuracy-based rewards enabled")
-    else:
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠ Using fallback heuristic rewards (Stockfish not available)")
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing reward analyzer...")
+    # TEMPORARY: Disable Stockfish during training to prevent engine crashes
+    # The chess.engine module has asyncio issues with concurrent analysis requests
+    # Once we stabilize the training loop, we can re-enable Stockfish with proper threading
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [WARN] Using fast heuristic rewards (Stockfish disabled for stability)")
+    reward_analyzer = StockfishRewardAnalyzer()
+    reward_analyzer.is_active = False  # Force fallback heuristics to avoid engine crashes
     
-    # Launch game visualizer
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Launching real-time game visualizer...")
-    try:
-        visualizer = launch_visualizer(num_games=num_white_games + num_black_games)
-        visualizer.set_status("Waiting for epoch to start...")
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: Could not launch visualizer: {e}")
-        visualizer = None
+    # Note: Real-time visualizer disabled due to thread-safety constraints
+    # Training runs in background threads, but Tkinter/Qt require main thread updates
+    # Console-only training provides cleaner execution and faster performance
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training will proceed with console output")
+    visualizer = None
     
     # Training configuration
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training Configuration:")
@@ -101,16 +98,16 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Time control: 60 seconds per player (timeout = loss)")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Move time baseline: 1 second (pain penalty per extra millisecond)")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Reward system:")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Green flash = move reward (good move by Stockfish analysis)")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Red flash = move pain penalty (bad move, accuracy loss)")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     - Green flash = move reward (good move by Stockfish analysis)")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     - Red flash = move pain penalty (bad move, accuracy loss)")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Max epochs: {max_epochs}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Learning rate: {LEARNING_RATE}")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   - Chess knowledge enabled: {USE_CHESS_KNOWLEDGE}")
     if USE_CHESS_KNOWLEDGE:
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Opening book: 500+ openings (Sicilian, Ruy Lopez, Italian, French, Caro-Kann, etc.)")
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Tactics: 19 patterns (pins, forks, skewers, discovered attacks, etc.)")
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Strategy: 40+ concepts (control center, develop pieces, king safety, etc.)")
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     • Endgame: 31 principles (opposition, zugzwang, king activity, etc.)")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     - Opening book: 500+ openings (Sicilian, Ruy Lopez, Italian, French, Caro-Kann, etc.)")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     - Tactics: 19 patterns (pins, forks, skewers, discovered attacks, etc.)")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     - Strategy: 40+ concepts (control center, develop pieces, king safety, etc.)")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]     - Endgame: 31 principles (opposition, zugzwang, king activity, etc.)")
     
     # Check for self-play checkpoint to resume
     self_play_checkpoint_path = os.path.join(CHECKPOINT_DIR, 'self_play_latest_checkpoint.pt')
@@ -143,10 +140,10 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         from queue import Queue
         import time as time_module
         
-        def play_game_worker(game_id, worker, env, play_as_white, queue):
+        def play_game_worker(game_id, worker, env, play_as_white, queue, visualizer=None):
             """Worker function for thread-safe game execution."""
             try:
-                result = worker.play_game(env, play_as_white)
+                result = worker.play_game(env, play_as_white, visualizer=visualizer, game_id=game_id)
                 queue.put(result)
             except Exception as e:
                 print(f"Error in game {game_id}: {e}")
@@ -162,7 +159,8 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
             env_white = ChessEnvironment()
             thread = threading.Thread(
                 target=play_game_worker,
-                args=(i, worker, env_white, True, results_queue)
+                args=(i, worker, env_white, True, results_queue),
+                kwargs={'visualizer': visualizer}
             )
             threads.append(thread)
             thread.start()
@@ -173,7 +171,8 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
             env_black = ChessEnvironment()
             thread = threading.Thread(
                 target=play_game_worker,
-                args=(num_white_games + i, worker, env_black, False, results_queue)
+                args=(num_white_games + i, worker, env_black, False, results_queue),
+                kwargs={'visualizer': visualizer}
             )
             threads.append(thread)
             thread.start()
@@ -228,11 +227,6 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Results - Wins: {wins}, Draws: {draws}, Losses: {losses} (Timeouts: {timeouts})")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Win Rate: {win_rate:.1f}%")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Move Accuracy - White: {avg_white_accuracy:.1f}%, Black: {avg_black_accuracy:.1f}%")
-        
-        # Update visualizer
-        if visualizer:
-            visualizer.set_epoch(epoch)
-            visualizer.set_status(f"Epoch {epoch} | Win Rate: {win_rate:.1f}% | Accuracy: W:{avg_white_accuracy:.1f}% B:{avg_black_accuracy:.1f}% | Games: {games_played}")
         
         # Check if model has achieved 100.0 accuracy
         if win_rate == 100.0:

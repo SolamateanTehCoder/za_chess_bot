@@ -22,7 +22,7 @@ class StockfishRewardAnalyzer:
     Additional time penalty for exceeding 1 second per move.
     """
     
-    def __init__(self, stockfish_path: Optional[str] = None, depth: int = 20, timeout_ms: int = 500):
+    def __init__(self, stockfish_path: Optional[str] = None, depth: int = 10, timeout_ms: int = 200):
         """
         Initialize Stockfish analyzer.
         
@@ -52,6 +52,7 @@ class StockfishRewardAnalyzer:
             # Try to find Stockfish if path not provided
             if self.stockfish_path is None:
                 possible_paths = [
+                    "C:\\stockfish\\stockfish-windows-x86-64-avx2.exe",  # Primary path
                     "stockfish",  # Linux/Mac
                     "stockfish.exe",  # Windows
                     "C:\\Program Files\\Stockfish\\stockfish.exe",  # Windows common location
@@ -147,22 +148,34 @@ class StockfishRewardAnalyzer:
             return self._heuristic_reward(board, move, move_time_ms)
         
         try:
-            # Analyze position before move
-            info_before = self.engine.analyse(board, chess.engine.Limit(depth=self.depth))
-            eval_before = info_before.get("score")
+            # Analyze position before move with timeout
+            try:
+                info_before = self.engine.analyse(board, chess.engine.Limit(depth=self.depth, time=0.15))
+                eval_before = info_before.get("score")
+            except Exception:
+                # If analysis fails, use heuristic
+                return self._heuristic_reward(board, move, move_time_ms)
             
-            # Get best move from Stockfish
-            best_move_info = self.engine.play(board, chess.engine.Limit(depth=self.depth, time=self.timeout_ms/1000))
-            best_move = best_move_info.move
-            result['best_move'] = best_move.uci() if best_move else None
+            # Get best move from Stockfish with short timeout
+            try:
+                best_move_info = self.engine.play(board, chess.engine.Limit(depth=min(self.depth, 10), time=0.1))
+                best_move = best_move_info.move
+                result['best_move'] = best_move.uci() if best_move else None
+            except Exception:
+                best_move = None
+                result['best_move'] = None
             
             # Make the move
             board_copy = board.copy()
             board_copy.push(move)
             
             # Analyze position after move
-            info_after = self.engine.analyse(board_copy, chess.engine.Limit(depth=self.depth))
-            eval_after = info_after.get("score")
+            try:
+                info_after = self.engine.analyse(board_copy, chess.engine.Limit(depth=self.depth, time=0.15))
+                eval_after = info_after.get("score")
+            except Exception:
+                # If analysis fails, use heuristic
+                return self._heuristic_reward(board, move, move_time_ms)
             
             # Convert evaluations to centipawn scores
             eval_before_cp = self._eval_to_cp(eval_before)
@@ -172,7 +185,7 @@ class StockfishRewardAnalyzer:
             result['eval_after'] = eval_after_cp
             
             # Check if this was the best move
-            result['is_best_move'] = (move == best_move)
+            result['is_best_move'] = (move == best_move) if best_move else False
             
             # Calculate accuracy based on evaluation change
             # We measure from the perspective of the player moving
