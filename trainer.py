@@ -32,8 +32,14 @@ class ChessDataset(Dataset):
         return len(self.states)
     
     def __getitem__(self, idx):
+        state = self.states[idx]
+        if not isinstance(state, torch.Tensor):
+            state = torch.FloatTensor(state)
+        elif state.dtype != torch.float32:
+            state = state.float()
+        
         return {
-            'state': self.states[idx],
+            'state': state,
             'action': torch.tensor(self.actions[idx], dtype=torch.long),
             'return': torch.tensor(self.returns[idx], dtype=torch.float32),
             'advantage': torch.tensor(self.advantages[idx], dtype=torch.float32),
@@ -102,9 +108,9 @@ class ChessTrainer:
         
         print(f"Training on {len(states)} samples...")
         
-        # Create dataset and dataloader
+        # Create dataset and dataloader (num_workers=0 to avoid multiprocessing issues on Windows)
         dataset = ChessDataset(states, actions, returns, advantages, old_log_probs)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
         
         epoch_policy_losses = []
         epoch_value_losses = []
