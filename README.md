@@ -46,11 +46,6 @@ Za Chess Bot/
 ├── config.py                       # Configuration parameters
 ├── utils.py                        # Utility functions
 ├── requirements.txt                # Python dependencies
-├── checkpoints/                    # Saved model checkpoints
-│   ├── latest_checkpoint.pt        # Stockfish-trained model
-│   ├── self_play_latest_checkpoint.pt  # Latest self-play checkpoint
-│   └── self_play_final_model.pt    # Final 100% model (when achieved)
-├── plots/                          # Training progress charts
 └── README.md                       # This file
 ```
 
@@ -324,7 +319,7 @@ This is a personal learning project. Feel free to fork and experiment!
 
 ## 📄 License
 
-Educational use only.
+GNU GENERAL PUBLIC LICENSE
 
 ---
 
