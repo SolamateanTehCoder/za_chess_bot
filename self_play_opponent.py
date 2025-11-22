@@ -244,13 +244,25 @@ class SelfPlayGameWorker:
                 move_time_ms = (time.time() - move_start_time) * 1000
                 self.move_times.append(move_time_ms)
                 
-                # Get Stockfish analysis for accuracy
-                accuracy_result = {}
-                if self.reward_analyzer:
-                    accuracy_result = self.reward_analyzer.analyze_move(env.board, move, move_time_ms)
+                # Get Stockfish/hybrid analysis for reward
+                stockfish_reward = 0.0
+                accuracy = 50.0
+                reward_source = "none"
                 
-                accuracy = accuracy_result.get('accuracy', 50.0)
-                stockfish_reward = accuracy_result.get('reward', 0.0)
+                if self.reward_analyzer:
+                    try:
+                        # Use hybrid analyzer (Stockfish + fallback)
+                        fen = env.board.fen()
+                        move_uci = move.uci()
+                        stockfish_reward, reward_source = self.reward_analyzer.get_move_reward(fen, move_uci)
+                        
+                        # Convert reward to accuracy percentage
+                        accuracy = ((stockfish_reward + 1.0) / 2.0) * 100.0
+                        accuracy = min(100.0, max(0.0, accuracy))
+                    except Exception as e:
+                        # Fallback to neutral if analysis fails
+                        stockfish_reward = 0.0
+                        accuracy = 50.0
                 
                 # Make the move
                 next_state, env_reward, done, info = env.step(move)
@@ -276,7 +288,7 @@ class SelfPlayGameWorker:
                     'source': move_source,
                     'accuracy': accuracy,
                     'move_time_ms': move_time_ms,
-                    'stockfish_analysis': accuracy_result
+                    'reward_source': reward_source
                 })
                 
                 self.move_history.append((move, f"AI-{move_source}"))
@@ -315,12 +327,22 @@ class SelfPlayGameWorker:
                 move_time_ms = (time.time() - move_start_time) * 1000
                 self.move_times.append(move_time_ms)
                 
-                # Get Stockfish analysis for opponent move
-                accuracy_result = {}
-                if self.reward_analyzer:
-                    accuracy_result = self.reward_analyzer.analyze_move(env.board, move, move_time_ms)
+                # Get Stockfish/hybrid analysis for opponent move
+                accuracy = 50.0
+                reward_source = "none"
                 
-                accuracy = accuracy_result.get('accuracy', 50.0)
+                if self.reward_analyzer:
+                    try:
+                        # Use hybrid analyzer (Stockfish + fallback)
+                        fen = env.board.fen()
+                        move_uci = move.uci()
+                        stockfish_reward, reward_source = self.reward_analyzer.get_move_reward(fen, move_uci)
+                        
+                        # Convert reward to accuracy percentage
+                        accuracy = ((stockfish_reward + 1.0) / 2.0) * 100.0
+                        accuracy = min(100.0, max(0.0, accuracy))
+                    except Exception as e:
+                        accuracy = 50.0
                 
                 next_state, reward, done, info = env.step(move)
                 self.move_history.append((move, f"Opponent-{move_source}"))

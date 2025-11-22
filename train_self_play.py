@@ -26,6 +26,7 @@ from stockfish_reward_analyzer import StockfishRewardAnalyzer
 from batch_game_player import BatchGamePlayer, BatchGameEvaluator
 from optimized_rewards import OptimizedRewardSystem, TimeBasedReward
 from checkpoint_utils import CheckpointOptimizer, CheckpointMonitor
+from stockfish_async_rewards import HybridRewardAnalyzer
 from config import (
     USE_CUDA, LEARNING_RATE, GAMMA, BATCH_SIZE, NUM_EPOCHS,
     CHECKPOINT_DIR, USE_CHESS_KNOWLEDGE
@@ -78,23 +79,19 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
     # Initialize trainer
     trainer = ChessTrainer(model, device=device, learning_rate=LEARNING_RATE)
     
-    # Initialize optimized reward system (2-3x faster with caching)
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing optimized reward system...")
+    # Initialize hybrid reward system (Stockfish + fallback heuristics)
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing hybrid reward system...")
+    hybrid_rewards = HybridRewardAnalyzer(use_stockfish=True)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [OPTIMIZATION] Hybrid rewards (Stockfish + fallback)")
+    
+    # Legacy systems (for compatibility)
     optimized_rewards = OptimizedRewardSystem(use_opening_book=True)
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [OPTIMIZATION] Using cached + opening book rewards (3x faster)")
-    
-    # Initialize batch game player (5x speedup for parallel games)
     batch_player = BatchGamePlayer(model, device, batch_size=28)
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [OPTIMIZATION] Batch game player initialized (GPU-accelerated)")
-    
-    # Initialize checkpoint optimizer (compression for faster saves)
     checkpoint_optimizer = CheckpointOptimizer(CHECKPOINT_DIR, compress=True)
     checkpoint_monitor = CheckpointMonitor(CHECKPOINT_DIR)
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [OPTIMIZATION] Checkpoint compression enabled")
     
-    # Legacy Stockfish (disabled for stability, using optimized heuristics instead)
-    reward_analyzer = StockfishRewardAnalyzer()
-    reward_analyzer.is_active = False  # Force fallback heuristics
+    # Legacy Stockfish (for compatibility only)
+    reward_analyzer = None  # Use hybrid_rewards instead
     
     # Note: Real-time visualizer disabled due to thread-safety constraints
     # Training runs in background threads, but Tkinter/Qt require main thread updates
@@ -167,7 +164,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         
         # Play games as white
         for i in range(num_white_games):
-            worker = SelfPlayGameWorker(i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE, reward_analyzer=reward_analyzer)
+            worker = SelfPlayGameWorker(i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE, reward_analyzer=hybrid_rewards)
             env_white = ChessEnvironment()
             thread = threading.Thread(
                 target=play_game_worker,
@@ -179,7 +176,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         
         # Play games as black
         for i in range(num_black_games):
-            worker = SelfPlayGameWorker(num_white_games + i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE, reward_analyzer=reward_analyzer)
+            worker = SelfPlayGameWorker(num_white_games + i, model, device, use_knowledge=USE_CHESS_KNOWLEDGE, reward_analyzer=hybrid_rewards)
             env_black = ChessEnvironment()
             thread = threading.Thread(
                 target=play_game_worker,
@@ -316,8 +313,8 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
     
     # Cleanup
-    if reward_analyzer:
-        reward_analyzer.close()
+    if hybrid_rewards:
+        hybrid_rewards.close()
     if visualizer:
         visualizer.stop()
 
