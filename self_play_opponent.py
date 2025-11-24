@@ -4,7 +4,6 @@ import torch
 import numpy as np
 from typing import Tuple, Optional
 import time
-from stockfish_reward_analyzer import StockfishRewardAnalyzer
 
 
 class SelfPlayOpponent:

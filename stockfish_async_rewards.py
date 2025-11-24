@@ -33,35 +33,10 @@ class StockfishProcessAnalyzer:
         self.result_cache = {}
         self.is_active = False
         
-        try:
-            # Start Stockfish process
-            self.process = subprocess.Popen(
-                [stockfish_path],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1
-            )
-            
-            # Configure Stockfish
-            self._send_command(f"setoption name Threads value {threads}")
-            self._send_command("isready")
-            
-            # Verify it's working
-            self._send_command("position startpos")
-            info = self._send_command("go depth 1")
-            
-            if info:
-                print(f"[SUCCESS] Stockfish process initialized")
-                self.is_active = True
-            else:
-                self.process.terminate()
-                self.is_active = False
-                
-        except Exception as e:
-            print(f"[WARN] Stockfish process failed: {e}")
-            self.is_active = False
+        # Don't initialize subprocess - use heuristics only
+        # Stockfish subprocess hangs on Windows, use fallback rewards
+        self.process = None
+        self.is_active = False
     
     def _send_command(self, cmd: str) -> str:
         """Send command to Stockfish and get response"""
@@ -162,20 +137,18 @@ class StockfishProcessAnalyzer:
 
 class HybridRewardAnalyzer:
     """
-    Combines Stockfish analysis with fast heuristics.
-    Uses Stockfish when available, falls back to heuristics for speed.
+    Fast heuristic-only reward system (Stockfish subprocess disabled - hangs on Windows).
+    Uses chess knowledge + material evaluation for move rewards.
     """
     
-    def __init__(self, use_stockfish: bool = True):
+    def __init__(self, use_stockfish: bool = False):
+        """
+        Args:
+            use_stockfish: Ignored (always uses heuristics due to Windows subprocess issues)
+        """
         self.stockfish_analyzer = None
-        self.use_stockfish = use_stockfish
-        
-        if use_stockfish:
-            try:
-                self.stockfish_analyzer = StockfishProcessAnalyzer(depth=10)
-            except Exception as e:
-                print(f"[WARN] Stockfish disabled: {e}")
-                self.use_stockfish = False
+        self.use_stockfish = False  # Always disabled
+        print(f"[INFO] Using fast heuristic rewards only (Stockfish disabled)")
     
     def get_move_reward(self, fen: str, move_uci: str) -> Tuple[float, str]:
         """
@@ -202,36 +175,48 @@ class HybridRewardAnalyzer:
         return reward, "heuristic"
     
     def _heuristic_reward(self, fen: str, move_uci: str) -> float:
-        """Fast heuristic evaluation"""
+        """
+        Fast heuristic evaluation - NO expensive checks.
+        Strictly fast (~1ms per evaluation).
+        """
         try:
             board = chess.Board(fen)
             move = chess.Move.from_uci(move_uci)
             
             reward = 0.0
             
-            # Captures
+            # Captures - immediate reward
             if board.is_capture(move):
                 captured = board.piece_at(move.to_square)
-                piece_values = {
-                    chess.PAWN: 0.1,
-                    chess.KNIGHT: 0.3,
-                    chess.BISHOP: 0.35,
-                    chess.ROOK: 0.5,
-                    chess.QUEEN: 0.9,
-                }
-                reward += piece_values.get(captured.piece_type, 0.1)
+                if captured:
+                    piece_values = {
+                        chess.PAWN: 0.15,
+                        chess.KNIGHT: 0.35,
+                        chess.BISHOP: 0.40,
+                        chess.ROOK: 0.60,
+                        chess.QUEEN: 1.0,
+                    }
+                    reward += piece_values.get(captured.piece_type, 0.15)
             
-            # Checks
+            # Make move for further analysis
             board.push(move)
-            if board.is_check():
-                reward += 0.2
             
-            # Center control
+            # Checks - tactical moves
+            if board.is_check():
+                reward += 0.25
+            
+            # Center control - positional moves
             to_row, to_col = divmod(move.to_square, 8)
             center_dist = abs(to_row - 3.5) + abs(to_col - 3.5)
-            center_bonus = (4 - center_dist) * 0.02
+            center_bonus = (4 - center_dist) * 0.03
             reward += center_bonus
             
+            # Pawn promotion bonus
+            move_obj = chess.Move(move.from_square, move.to_square, move.promotion)
+            if move_obj.promotion:
+                reward += 0.8
+            
+            # Normalize
             return np.clip(float(reward), -1.0, 1.0)
         except:
             return 0.0

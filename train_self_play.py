@@ -1,6 +1,6 @@
 """
 Self-play training where the model plays against itself.
-28 games: 14 as white, 14 as black
+8 games: 4 as white, 4 as black
 Training stops when model reaches 100.0 accuracy (100% win rate against itself).
 
 Each move is analyzed by Stockfish for accuracy-based rewards:
@@ -9,12 +9,28 @@ Each move is analyzed by Stockfish for accuracy-based rewards:
 - Time penalty: 1 second baseline; each millisecond over incurs pain
 """
 
+import os
+import sys
+
+# Disable PyTorch dynamo compiler BEFORE importing torch
+os.environ['TORCH_COMPILE_DEBUG'] = '0'
+
 import torch
 import numpy as np
 from datetime import datetime
-import os
 from pathlib import Path
-import sys
+
+# Disable all PyTorch optimization that causes slowdowns
+torch._C._jit_set_profiling_mode(False)
+torch._C._jit_set_profiling_executor(False)
+torch.set_float32_matmul_precision('high')
+
+try:
+    import torch._dynamo
+    torch._dynamo.config.suppress_errors = True
+    torch._dynamo.config.cache_size_limit = 0
+except:
+    pass
 
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -22,10 +38,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from model import ChessNet
 from chess_env import ChessEnvironment
 from trainer import ChessTrainer
-from stockfish_reward_analyzer import StockfishRewardAnalyzer
-from batch_game_player import BatchGamePlayer, BatchGameEvaluator
-from optimized_rewards import OptimizedRewardSystem, TimeBasedReward
-from checkpoint_utils import CheckpointOptimizer, CheckpointMonitor
 from stockfish_async_rewards import HybridRewardAnalyzer
 from config import (
     USE_CUDA, LEARNING_RATE, GAMMA, BATCH_SIZE, NUM_EPOCHS,
@@ -33,7 +45,7 @@ from config import (
 )
 
 
-def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_games=14):
+def run_self_play_training(max_epochs=100000, num_white_games=4, num_black_games=4):
     """
     Run self-play training where model plays against itself.
     
@@ -79,19 +91,10 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
     # Initialize trainer
     trainer = ChessTrainer(model, device=device, learning_rate=LEARNING_RATE)
     
-    # Initialize hybrid reward system (Stockfish + fallback heuristics)
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing hybrid reward system...")
-    hybrid_rewards = HybridRewardAnalyzer(use_stockfish=True)
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [OPTIMIZATION] Hybrid rewards (Stockfish + fallback)")
-    
-    # Legacy systems (for compatibility)
-    optimized_rewards = OptimizedRewardSystem(use_opening_book=True)
-    batch_player = BatchGamePlayer(model, device, batch_size=28)
-    checkpoint_optimizer = CheckpointOptimizer(CHECKPOINT_DIR, compress=True)
-    checkpoint_monitor = CheckpointMonitor(CHECKPOINT_DIR)
-    
-    # Legacy Stockfish (for compatibility only)
-    reward_analyzer = None  # Use hybrid_rewards instead
+    # Initialize hybrid reward system (heuristic-based, Stockfish disabled)
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing reward system...")
+    hybrid_rewards = HybridRewardAnalyzer(use_stockfish=False)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [OPTIMIZATION] Fast heuristic rewards (no Stockfish subprocess)")
     
     # Note: Real-time visualizer disabled due to thread-safety constraints
     # Training runs in background threads, but Tkinter/Qt require main thread updates
@@ -152,10 +155,14 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         def play_game_worker(game_id, worker, env, play_as_white, queue, visualizer=None):
             """Worker function for thread-safe game execution."""
             try:
+                print(f"[GAME {game_id}] Starting...")
                 result = worker.play_game(env, play_as_white, visualizer=visualizer, game_id=game_id)
+                print(f"[GAME {game_id}] Completed with {result.get('moves', 0)} moves")
                 queue.put(result)
             except Exception as e:
-                print(f"Error in game {game_id}: {e}")
+                import traceback
+                print(f"[GAME {game_id}] Error: {e}")
+                traceback.print_exc()
                 queue.put(None)
         
         results_queue = Queue()
@@ -169,10 +176,12 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
             thread = threading.Thread(
                 target=play_game_worker,
                 args=(i, worker, env_white, True, results_queue),
-                kwargs={'visualizer': visualizer}
+                kwargs={'visualizer': visualizer},
+                daemon=False
             )
             threads.append(thread)
             thread.start()
+            time_module.sleep(0.05)  # Small delay to avoid resource contention
         
         # Play games as black
         for i in range(num_black_games):
@@ -181,18 +190,27 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
             thread = threading.Thread(
                 target=play_game_worker,
                 args=(num_white_games + i, worker, env_black, False, results_queue),
-                kwargs={'visualizer': visualizer}
+                kwargs={'visualizer': visualizer},
+                daemon=False
             )
             threads.append(thread)
             thread.start()
+            time_module.sleep(0.05)  # Small delay to avoid resource contention
         
-        # Wait for all games to complete, updating visualizer
-        for thread in threads:
-            thread.join()
+        # Wait for all games to complete
+        # Games can take 10-100+ seconds depending on game length
+        game_elapsed = time_module.time() - game_start_time
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Waiting for games to complete (timeout: 5 minutes)...")
+        
+        # Wait up to 5 minutes for games to complete
+        max_wait = 300
+        wait_start = time_module.time()
+        while not all(not t.is_alive() for t in threads) and (time_module.time() - wait_start) < max_wait:
+            time_module.sleep(0.5)
         
         game_elapsed = time_module.time() - game_start_time
         
-        # Collect results
+        # Collect all results from queue
         all_experiences = []
         wins = 0
         losses = 0
@@ -202,28 +220,33 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         all_white_accuracies = []
         all_black_accuracies = []
         
-        while not results_queue.empty():
-            game_result = results_queue.get()
-            if game_result is None:
-                continue
-            
-            all_experiences.extend(game_result['experiences'])
-            total_moves += game_result['moves']
-            
-            # Collect accuracies
-            all_white_accuracies.extend(game_result.get('white_accuracies', []))
-            all_black_accuracies.extend(game_result.get('black_accuracies', []))
-            
-            # Count result - timeout counts as a loss
-            if game_result.get('timeout', False):
-                timeouts += 1
-                losses += 1
-            elif game_result['result'] == 'Win':
-                wins += 1
-            elif game_result['result'] == 'Loss':
-                losses += 1
-            else:
-                draws += 1
+        # Drain the entire queue
+        while True:
+            try:
+                game_result = results_queue.get(timeout=2)
+                if game_result is None:
+                    continue
+                
+                all_experiences.extend(game_result['experiences'])
+                total_moves += game_result['moves']
+                
+                # Collect accuracies
+                all_white_accuracies.extend(game_result.get('white_accuracies', []))
+                all_black_accuracies.extend(game_result.get('black_accuracies', []))
+                
+                # Count result - timeout counts as a loss
+                if game_result.get('timeout', False):
+                    timeouts += 1
+                    losses += 1
+                elif game_result['result'] == 'Win':
+                    wins += 1
+                elif game_result['result'] == 'Loss':
+                    losses += 1
+                else:
+                    draws += 1
+            except:
+                # Queue empty or timeout - all games done
+                break
         
         games_played = wins + losses + draws
         win_rate = (wins / games_played * 100) if games_played > 0 else 0
@@ -250,16 +273,16 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
                 'white_accuracy': avg_white_accuracy,
                 'black_accuracy': avg_black_accuracy
             }
-            checkpoint_path, file_size = checkpoint_optimizer.save_checkpoint(
-                model,
-                trainer.optimizer,
-                epoch,
-                metrics,
-                checkpoint_name="self_play_final_model.pt"
-            )
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Final model saved: {file_size:.1f}MB")
-            checkpoint_optimizer.save_metadata()
-            
+            checkpoint_path = os.path.join(CHECKPOINT_DIR, "self_play_final_model.pt")
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': trainer.optimizer.state_dict(),
+                'epoch': epoch,
+                'final_epoch': epoch,
+                'total_games': games_played,
+                'white_accuracy': avg_white_accuracy,
+                'black_accuracy': avg_black_accuracy
+            }, checkpoint_path)
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Final model saved: {checkpoint_path}")
             break
         
@@ -290,24 +313,19 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Value Loss: {results['value_loss']:.6f}")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Total Loss: {results['total_loss']:.6f}")
         
-        # Save checkpoint every 10 epochs using optimized compression
+        # Save checkpoint every 10 epochs
         if epoch % 10 == 0:
-            metrics = {
-                'win_rate': win_rate,
+            checkpoint_path = os.path.join(CHECKPOINT_DIR, f"self_play_epoch_{epoch}.pt")
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': trainer.optimizer.state_dict(),
                 'epoch': epoch,
+                'win_rate': win_rate,
                 'white_accuracy': avg_white_accuracy,
                 'black_accuracy': avg_black_accuracy,
                 'total_moves': total_moves
-            }
-            checkpoint_path, file_size = checkpoint_optimizer.save_checkpoint(
-                model,
-                trainer.optimizer,
-                epoch,
-                metrics,
-                checkpoint_name=f"self_play_epoch_{epoch}.pt"
-            )
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checkpoint saved: {file_size:.1f}MB (compression enabled)")
-            checkpoint_monitor.print_checkpoint_stats()
+            }, checkpoint_path)
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checkpoint saved: {checkpoint_path}")
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Epoch {epoch} completed")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
@@ -322,6 +340,6 @@ def run_self_play_training(max_epochs=100000, num_white_games=14, num_black_game
 if __name__ == "__main__":
     run_self_play_training(
         max_epochs=100000,
-        num_white_games=14,
-        num_black_games=14
+        num_white_games=4,
+        num_black_games=4
     )
