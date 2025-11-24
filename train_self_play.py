@@ -23,7 +23,17 @@ from pathlib import Path
 # Disable all PyTorch optimization that causes slowdowns
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
-torch.set_float32_matmul_precision('high')
+
+# Set float32 matmul precision using the new API
+try:
+    torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
+except:
+    # Fallback for older PyTorch versions
+    try:
+        torch.set_float32_matmul_precision('high')
+    except:
+        pass
 
 try:
     import torch._dynamo
