@@ -370,7 +370,7 @@ class SelfPlayGameWorker:
             'moves': move_count,
             'experiences': experiences,
             'move_history': self.move_history,
-            'timeout': False,
+            'timeout': True,
             'time_exceeded': times_exceeded,
             'white_accuracies': white_accuracies,
             'black_accuracies': black_accuracies,

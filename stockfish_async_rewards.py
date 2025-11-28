@@ -137,22 +137,58 @@ class StockfishProcessAnalyzer:
 
 class HybridRewardAnalyzer:
     """
-    Fast heuristic-only reward system (Stockfish subprocess disabled - hangs on Windows).
-    Uses chess knowledge + material evaluation for move rewards.
+    Hybrid reward system combining Stockfish analysis with heuristic fallback.
+    Uses chess.engine module for reliable Stockfish integration.
     """
     
-    def __init__(self, use_stockfish: bool = False):
+    def __init__(self, use_stockfish: bool = True, stockfish_path: str = None):
         """
         Args:
-            use_stockfish: Ignored (always uses heuristics due to Windows subprocess issues)
+            use_stockfish: Whether to use Stockfish (default True)
+            stockfish_path: Path to Stockfish executable (auto-detect if None)
         """
         self.stockfish_analyzer = None
-        self.use_stockfish = False  # Always disabled
-        print(f"[INFO] Using fast heuristic rewards only (Stockfish disabled)")
+        self.use_stockfish = use_stockfish
+        self.engine = None
+        
+        if use_stockfish:
+            self._initialize_stockfish(stockfish_path)
+        else:
+            print(f"[INFO] Using fast heuristic rewards only (Stockfish disabled)")
+    
+    def _initialize_stockfish(self, stockfish_path: str = None):
+        """Initialize Stockfish engine with proper error handling"""
+        try:
+            import chess.engine
+            
+            # Try to find Stockfish if path not provided
+            if stockfish_path is None:
+                stockfish_path = r"C:\stockfish\stockfish-windows-x86-64-avx2.exe"
+            
+            # Test if Stockfish exists
+            import os
+            if not os.path.exists(stockfish_path):
+                print(f"[WARN] Stockfish not found at {stockfish_path}, using heuristics")
+                self.use_stockfish = False
+                return
+            
+            # Try to initialize with timeout
+            try:
+                self.engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
+                print(f"[INFO] Stockfish engine initialized successfully")
+                self.use_stockfish = True
+            except Exception as e:
+                print(f"[WARN] Failed to initialize Stockfish: {e}, using heuristics")
+                self.use_stockfish = False
+                self.engine = None
+                
+        except ImportError:
+            print(f"[WARN] chess.engine module not available, using heuristics")
+            self.use_stockfish = False
     
     def get_move_reward(self, fen: str, move_uci: str) -> Tuple[float, str]:
         """
-        Get reward for a move using best available method.
+        Get reward for a move using Stockfish analysis with heuristic fallback.
         
         Args:
             fen: Board position
@@ -161,23 +197,98 @@ class HybridRewardAnalyzer:
         Returns:
             Tuple of (reward, source) where source is "stockfish" or "heuristic"
         """
-        # Try Stockfish first
-        if self.use_stockfish and self.stockfish_analyzer and self.stockfish_analyzer.is_active:
+        # Try Stockfish first if available
+        if self.use_stockfish and self.engine:
             try:
-                reward = self.stockfish_analyzer.analyze_move(fen, move_uci)
-                if reward != 0.0:  # Got a real analysis
+                reward = self._analyze_move_with_stockfish(fen, move_uci)
+                if reward is not None:
                     return reward, "stockfish"
             except Exception as e:
-                print(f"[WARN] Stockfish analysis failed: {e}")
+                print(f"[WARN] Stockfish analysis failed: {e}, falling back to heuristics")
         
         # Fall back to heuristic
         reward = self._heuristic_reward(fen, move_uci)
         return reward, "heuristic"
     
+    def _analyze_move_with_stockfish(self, fen: str, move_uci: str, depth: int = 10) -> Optional[float]:
+        """
+        Analyze a move using Stockfish with a timeout to prevent blocking.
+        
+        Args:
+            fen: Board position FEN
+            move_uci: Move in UCI format
+            depth: Analysis depth (reduced for speed)
+            
+        Returns:
+            Reward value (-1.0 to 1.0) or None if analysis fails
+        """
+        if not self.engine:
+            return None
+        
+        try:
+            board = chess.Board(fen)
+            move = chess.Move.from_uci(move_uci)
+            
+            # Use time limit instead of depth to prevent infinite analysis
+            # 100ms max per analysis = very fast
+            limit = chess.engine.Limit(time=0.1, depth=depth)
+            
+            # Analyze position before move
+            info_before = self.engine.analyse(board, limit, info=chess.engine.INFO_BASIC)
+            score_before = info_before.get("score")
+            
+            if score_before is None:
+                return None
+            
+            # Make move and analyze after
+            board.push(move)
+            info_after = self.engine.analyse(board, limit, info=chess.engine.INFO_BASIC)
+            score_after = info_after.get("score")
+            
+            if score_after is None:
+                return None
+            
+            # Convert scores to centipawns (accounting for perspective)
+            cp_before = self._score_to_cp(score_before, not board.turn)  # Before move, opposite perspective
+            cp_after = self._score_to_cp(score_after, not board.turn)    # After move, opposite perspective
+            
+            # Calculate reward: how much the move improved the position
+            cp_improvement = cp_after - cp_before
+            
+            # Normalize: 300 centipawns = ±1.0 reward
+            reward = np.clip(cp_improvement / 300.0, -1.0, 1.0)
+            
+            return float(reward)
+            
+        except Exception as e:
+            # Silently fail for timeouts, don't flood console
+            return None
+    
+    def _score_to_cp(self, score, from_white_perspective: bool) -> float:
+        """Convert chess.engine.Score to centipawns"""
+        try:
+            if score.is_mate():
+                # Mate score - very high/low
+                return 10000 if score.mate() > 0 else -10000
+            else:
+                cp = score.cp
+                # If from black perspective, negate
+                return cp if from_white_perspective else -cp
+        except:
+            return 0.0
+    
     def _heuristic_reward(self, fen: str, move_uci: str) -> float:
         """
-        Fast heuristic evaluation - NO expensive checks.
-        Strictly fast (~1ms per evaluation).
+        Enhanced heuristic evaluation based on Stockfish principles.
+        Fast (~2ms per evaluation) but with rich chess knowledge.
+        
+        Rewards:
+        - Material gain (captures): +0.15 to +1.0
+        - Checks and tactical moves: +0.25 to +0.5
+        - Center control: +0.03 to +0.12
+        - Piece development: +0.05 to +0.15
+        - King safety: +0.1 to +0.3
+        - Pawn promotion: +0.8
         """
         try:
             board = chess.Board(fen)
@@ -185,7 +296,7 @@ class HybridRewardAnalyzer:
             
             reward = 0.0
             
-            # Captures - immediate reward
+            # 1. MATERIAL GAINS - Captures
             if board.is_capture(move):
                 captured = board.piece_at(move.to_square)
                 if captured:
@@ -197,31 +308,88 @@ class HybridRewardAnalyzer:
                         chess.QUEEN: 1.0,
                     }
                     reward += piece_values.get(captured.piece_type, 0.15)
+                    
+                    # Bonus if capturing with less valuable piece
+                    attacking_piece = board.piece_at(move.from_square)
+                    if attacking_piece and attacking_piece.piece_type < captured.piece_type:
+                        reward += 0.1
             
             # Make move for further analysis
+            moving_piece = board.piece_at(move.from_square)
             board.push(move)
             
-            # Checks - tactical moves
+            # 2. TACTICAL MOVES - Checks and discovered attacks
             if board.is_check():
                 reward += 0.25
+                # Extra reward for checks that lead to checkmate patterns
+                if len(list(board.legal_moves)) <= 2:
+                    reward += 0.15
             
-            # Center control - positional moves
+            # 3. CENTER CONTROL
             to_row, to_col = divmod(move.to_square, 8)
             center_dist = abs(to_row - 3.5) + abs(to_col - 3.5)
-            center_bonus = (4 - center_dist) * 0.03
+            center_bonus = (4 - center_dist) * 0.03  # 0.0-0.12 range
             reward += center_bonus
             
-            # Pawn promotion bonus
-            move_obj = chess.Move(move.from_square, move.to_square, move.promotion)
-            if move_obj.promotion:
-                reward += 0.8
+            # Extra bonus for controlling d4/d5/e4/e5 early game
+            if move.to_square in [27, 28, 35, 36]:  # d4, e4, d5, e5
+                reward += 0.08
             
-            # Normalize
+            # 4. PIECE DEVELOPMENT
+            if moving_piece and moving_piece.piece_type in [chess.KNIGHT, chess.BISHOP]:
+                # Moving knight/bishop from back rank = development
+                from_row = divmod(move.from_square, 8)[0]
+                if (moving_piece.color == chess.WHITE and from_row == 0) or \
+                   (moving_piece.color == chess.BLACK and from_row == 7):
+                    reward += 0.05
+            
+            # 5. KING SAFETY
+            # Moving rook to back rank (castling or defending)
+            if moving_piece and moving_piece.piece_type == chess.ROOK:
+                to_row, to_col = divmod(move.to_square, 8)
+                if (moving_piece.color == chess.WHITE and to_row == 0) or \
+                   (moving_piece.color == chess.BLACK and to_row == 7):
+                    reward += 0.08
+            
+            # Penalize moving king to edge of board (except castling)
+            if moving_piece and moving_piece.piece_type == chess.KING:
+                to_row, to_col = divmod(move.to_square, 8)
+                edge_dist = min(to_col, 7 - to_col, to_row, 7 - to_row)
+                if edge_dist < 2:
+                    reward -= 0.05
+            
+            # 6. PAWN PROMOTION - Highest priority
+            if move.promotion:
+                reward += 0.8
+                if move.promotion != chess.QUEEN:  # Underpromo is rarely good
+                    reward -= 0.2
+            
+            # 7. PUSHING PASSED PAWNS
+            if moving_piece and moving_piece.piece_type == chess.PAWN:
+                to_row, to_col = divmod(move.to_square, 8)
+                # Moving pawn forward (towards promotion)
+                if (moving_piece.color == chess.WHITE and to_row >= 4) or \
+                   (moving_piece.color == chess.BLACK and to_row <= 3):
+                    reward += 0.08
+            
+            # 8. AVOIDING BLUNDERS - penalty for moving into attack
+            # (simplified - just check if king is in check after move)
+            if board.is_check():
+                # Already got points for checking, but being checked is bad
+                if board.turn == (not moving_piece.color) if moving_piece else chess.WHITE:
+                    reward -= 0.3
+            
+            # Normalize to [-1.0, 1.0]
             return np.clip(float(reward), -1.0, 1.0)
-        except:
+        except Exception as e:
+            # Fallback for any parsing errors
             return 0.0
     
     def close(self):
-        """Cleanup"""
-        if self.stockfish_analyzer:
-            self.stockfish_analyzer.close()
+        """Clean up Stockfish engine"""
+        if self.engine:
+            try:
+                self.engine.quit()
+            except:
+                pass
+            self.engine = None

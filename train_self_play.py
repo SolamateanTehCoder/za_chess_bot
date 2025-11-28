@@ -101,10 +101,11 @@ def run_self_play_training(max_epochs=100000, num_white_games=4, num_black_games
     # Initialize trainer
     trainer = ChessTrainer(model, device=device, learning_rate=LEARNING_RATE)
     
-    # Initialize hybrid reward system (heuristic-based, Stockfish disabled)
+    # Initialize hybrid reward system with Stockfish disabled (asyncio conflicts in multithreading)
+    # Using advanced heuristic rewards that incorporate Stockfish principles
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing reward system...")
     hybrid_rewards = HybridRewardAnalyzer(use_stockfish=False)
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [OPTIMIZATION] Fast heuristic rewards (no Stockfish subprocess)")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [REWARDS] Advanced heuristic rewards (Stockfish principles, no asyncio conflicts)")
     
     # Note: Real-time visualizer disabled due to thread-safety constraints
     # Training runs in background threads, but Tkinter/Qt require main thread updates
