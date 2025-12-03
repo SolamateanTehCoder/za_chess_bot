@@ -374,10 +374,8 @@ class HybridRewardAnalyzer:
             
             # 8. AVOIDING BLUNDERS - penalty for moving into attack
             # (simplified - just check if king is in check after move)
-            if board.is_check():
-                # Already got points for checking, but being checked is bad
-                if board.turn == (not moving_piece.color) if moving_piece else chess.WHITE:
-                    reward -= 0.3
+            # Note: After push(), board.turn has switched to opponent
+            # If current player's king is in check, that's bad (and already counted above)
             
             # Normalize to [-1.0, 1.0]
             return np.clip(float(reward), -1.0, 1.0)

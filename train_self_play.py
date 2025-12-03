@@ -12,6 +12,9 @@ Each move is analyzed by Stockfish for accuracy-based rewards:
 import os
 import sys
 
+# Enable line buffering for stdout so logs appear in real-time
+sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1, newline='')
+
 # Disable PyTorch dynamo compiler BEFORE importing torch
 os.environ['TORCH_COMPILE_DEBUG'] = '0'
 
@@ -270,6 +273,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=4, num_black_games
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Results - Wins: {wins}, Draws: {draws}, Losses: {losses} (Timeouts: {timeouts})")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Win Rate: {win_rate:.1f}%")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Move Accuracy - White: {avg_white_accuracy:.1f}%, Black: {avg_black_accuracy:.1f}%")
+        sys.stdout.flush()
         
         # Check if model has achieved 100.0 accuracy
         if win_rate == 100.0:
@@ -309,12 +313,31 @@ def run_self_play_training(max_epochs=100000, num_white_games=4, num_black_games
             'advantages': []
         }
         
+        # Collect rewards and advantages
+        raw_rewards = []
         for exp in all_experiences:
             training_data['states'].append(exp['state'])
             training_data['actions'].append(exp['action'])
-            training_data['returns'].append(exp['reward'])
             training_data['log_probs'].append(exp['log_prob'])
-            training_data['advantages'].append(exp['reward'])
+            raw_rewards.append(exp['reward'])
+        
+        # Use raw rewards directly (no normalization - that breaks gradient flow)
+        # Raw rewards are already normalized to [-1.0, 1.0] by the reward analyzer
+        raw_rewards = np.array(raw_rewards, dtype=np.float32)
+        
+        # Shift rewards to be mostly positive for policy gradient
+        # This is a baseline subtraction: advantages = rewards - baseline
+        # Using mean as baseline helps with gradient stability
+        reward_mean = np.mean(raw_rewards) if len(raw_rewards) > 0 else 0.0
+        advantages = raw_rewards - reward_mean
+        
+        # Add small offset to ensure mostly positive advantages (helps with learning)
+        # Since raw rewards are in [-1.0, 1.0], this shifts them to roughly [0.0, 2.0]
+        advantages = advantages + 1.0
+        
+        # Returns are the same as advantages for this simple setup
+        training_data['returns'] = advantages.tolist()
+        training_data['advantages'] = advantages.tolist()
         
         # Train
         results = trainer.train_epoch(training_data, batch_size=BATCH_SIZE, ppo_epochs=4)
@@ -323,6 +346,7 @@ def run_self_play_training(max_epochs=100000, num_white_games=4, num_black_games
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Policy Loss: {results['policy_loss']:.6f}")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Value Loss: {results['value_loss']:.6f}")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Total Loss: {results['total_loss']:.6f}")
+        sys.stdout.flush()
         
         # Save checkpoint every 10 epochs
         if epoch % 10 == 0:

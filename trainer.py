@@ -136,11 +136,8 @@ class ChessTrainer:
                 log_probs = torch.log_softmax(policy_logits, dim=-1)
                 action_log_probs = log_probs.gather(1, batch_actions.unsqueeze(-1)).squeeze(-1)
                 
-                # PPO clipped objective
-                ratio = torch.exp(action_log_probs - batch_old_log_probs)
-                surr1 = ratio * batch_advantages
-                surr2 = torch.clamp(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * batch_advantages
-                policy_loss = -torch.min(surr1, surr2).mean()
+                # Simple policy gradient (more stable than PPO when old_log_probs might be stale)
+                policy_loss = -(action_log_probs * batch_advantages).mean()
                 
                 # Value loss
                 value_loss = nn.MSELoss()(values, batch_returns)
