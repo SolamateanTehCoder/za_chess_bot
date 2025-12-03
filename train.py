@@ -174,55 +174,56 @@ def main():
     
     # Game playing phase
     game_count = 0
-    win_count = 0
-    draw_count = 0
-    loss_count = 0
+    self_play_count = 0  # Counts self-play games (model vs model)
+    white_wins = 0
+    black_wins = 0
+    draws = 0
     game_experiences = []
     
     try:
         while True:
-            game_count += 1
-            overall_game_num = total_games_completed + game_count
-            play_white = game_count % 2 == 1
+            self_play_count += 1
+            overall_game_num = total_games_completed + self_play_count
             
-            print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] GAME {overall_game_num}")
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Playing as: {'White' if play_white else 'Black'}")
+            print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SELF-PLAY GAME {overall_game_num}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Model (White) vs Model (Black)")
             
-            # Play game
+            # Play self-play game (model vs itself)
             game_start = datetime.now()
-            result = game_player.play_game(play_as_white=play_white)
+            result_white = game_player.play_game(play_as_white=True)
             game_duration = (datetime.now() - game_start).total_seconds()
             
-            # Log the game
-            logger.log_game(overall_game_num, play_white, result, game_duration)
+            # Log the game from white's perspective
+            logger.log_game(overall_game_num, True, result_white['result'], game_duration)
             
             # Track result
-            if result['result'] == 'Win':
-                win_count += 1
-            elif result['result'] == 'Draw':
-                draw_count += 1
+            if result_white['result'] == 'Win':
+                white_wins += 1
+            elif result_white['result'] == 'Draw':
+                draws += 1
             else:
-                loss_count += 1
+                black_wins += 1
             
-            game_experiences.append(result)
+            game_experiences.append(result_white)
+            game_count += 1
             
             # Print game summary
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Result: {result['result']}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Result: {result_white['result']}")
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Duration: {game_duration:.1f}s")
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] AI moves: {result['num_ai_moves']}/{result['moves']}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] AI moves: {result_white['num_ai_moves']}/{result_white['moves']}")
             
-            if result['experiences']:
-                rewards = [exp['reward'] for exp in result['experiences']]
+            if result_white['experiences']:
+                rewards = [exp['reward'] for exp in result_white['experiences']]
                 avg_reward = np.mean(rewards)
-                times = [exp['move_time_ms'] for exp in result['experiences']]
+                times = [exp['move_time_ms'] for exp in result_white['experiences']]
                 avg_time = np.mean(times)
                 
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Avg reward: {avg_reward:.4f}")
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Avg reward (White): {avg_reward:.4f}")
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Avg move time: {avg_time:.1f}ms")
             
-            # Calculate win rate
-            win_rate = (win_count / game_count) * 100
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Win rate: {win_rate:.1f}% ({win_count}W {draw_count}D {loss_count}L)")
+            # Calculate statistics
+            total_games_played = white_wins + black_wins + draws
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Self-Play Stats: {white_wins}W {black_wins}L {draws}D ({total_games_played} games)")
             
             sys.stdout.flush()
             
@@ -232,53 +233,12 @@ def main():
                 trainer.save_checkpoint(str(checkpoint_path), {
                     'game_count': game_count,
                     'total_games_played': overall_game_num,
-                    'win_rate': win_rate,
+                    'white_wins': white_wins,
+                    'black_wins': black_wins,
+                    'draws': draws,
                     'epoch': training_epoch
                 })
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] *** CHECKPOINT SAVED: {checkpoint_path.name} ***")
-            
-            # Check if 100% accuracy achieved
-            if win_count == game_count:
-                print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] *** 100% ACCURACY ACHIEVED! ***")
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Model won all {game_count} games")
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting training phase...")
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
-                
-                # Training phase
-                train_start = datetime.now()
-                print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training on {game_count} games...")
-                
-                losses = trainer.train_on_games(game_experiences, batch_size=32, epochs=4)
-                
-                train_duration = (datetime.now() - train_start).total_seconds()
-                
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training completed in {train_duration:.1f}s")
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Policy Loss: {losses['policy_loss']:.6f}")
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Value Loss: {losses['value_loss']:.6f}")
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Total Loss: {losses['total_loss']:.6f}")
-                
-                # Save checkpoint
-                checkpoint_path = checkpoint_dir / f"model_after_100pct_epoch_{training_epoch}.pt"
-                trainer.save_checkpoint(str(checkpoint_path), {
-                    'game_count': game_count,
-                    'total_games_played': overall_game_num,
-                    'win_rate': 100.0,
-                    'epoch': training_epoch
-                })
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checkpoint saved: {checkpoint_path}")
-                
-                # Reset for next phase
-                training_epoch += 1
-                game_count = 0
-                win_count = 0
-                draw_count = 0
-                loss_count = 0
-                game_experiences = []
-                total_games_completed = overall_game_num
-                
-                print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Resuming games for next training iteration...")
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
     
     except KeyboardInterrupt:
         print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Training interrupted by user")
@@ -287,6 +247,7 @@ def main():
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Closing...")
         if hasattr(game_player, 'analyzer') and game_player.analyzer:
             game_player.analyzer.close()
+
 
 
 if __name__ == "__main__":

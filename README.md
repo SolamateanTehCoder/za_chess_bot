@@ -16,10 +16,10 @@ A lightweight chess engine trained through reinforcement learning using Stockfis
   - 300 centipawns (cp) = ±1.0 reward (normalized)
   - Time penalty combined with move quality
 
-- **Single-Game Training Loop**:
-  - Plays one game at a time (sequential)
-  - Collects game experiences
-  - Trains only when 100% win rate achieved
+- **Self-Play Training**:
+  - Model plays against itself each game
+  - Learns both white and black perspectives simultaneously
+  - Continuous learning mode (no accuracy gates)
   - Simple policy gradient (not PPO)
 
 - **Lightweight Architecture**: 
@@ -45,12 +45,12 @@ A lightweight chess engine trained through reinforcement learning using Stockfis
    - Clipped to [-1.0, 1.0]
 4. Experiences collected: move, reward, move_time
 
-### Training Gate
-- Plays games until **100% win rate** achieved
-- Once all games won → triggers training phase
-- Trains on collected experiences using simple policy gradient
-- Saves checkpoint
-- Resets and repeats (curriculum learning)
+### Training Loop
+- Plays self-play games (model vs itself)
+- Model plays white, learns outcomes from both perspectives
+- Continuous learning: trains on every game without accuracy gates
+- Regular checkpoints every 500 games
+- Game experiences logged to `games.jsonl` for analysis
 
 ### Reward Structure
 ```
@@ -72,8 +72,8 @@ Za Chess Bot/
 ├── visualizer.py             # (Optional) Real-time HTML visualization
 ├── README.md                 # This file
 ├── checkpoints/              # Saved model checkpoints
-│   └── model_after_100pct_epoch_*.pt
-└── game_data.json            # (Auto-generated) Game statistics
+│   └── model_checkpoint_game_*.pt
+└── games.jsonl               # Game logs (move-by-move, auto-generated)
 ```
 
 ## 🚀 Usage
@@ -84,18 +84,18 @@ python -u train.py
 ```
 
 **Output shows**:
-- Game results (Win/Draw/Loss)
+- Self-play game results (white wins, black wins, draws)
 - Move statistics (AI moves, duration)
 - Average rewards and move times
-- Win rate progression
-- Training triggers and checkpoints
+- Win/loss balance across perspectives
+- Checkpoint saves every 500 games
 
 ### What Happens
-1. **Early games**: Random moves, learns from Stockfish feedback
-2. **As it learns**: Improves move quality → better rewards
-3. **At 100% win rate**: Automatically trains on all games
-4. **Checkpoint saved**: To `checkpoints/model_after_100pct_epoch_N.pt`
-5. **Cycles repeat**: Plays again with improved model
+1. **Self-play games**: Model plays white, learns from both winning and losing (black) perspective
+2. **Move evaluation**: Every move scored by Stockfish + time penalty
+3. **Continuous learning**: Trains on experiences without accuracy thresholds
+4. **Checkpoint saved**: Every 500 games to `checkpoints/model_checkpoint_game_N.pt`
+5. **Progress tracking**: Game outcomes logged to `games.jsonl` for analysis
 
 ## 📊 Training Parameters
 
