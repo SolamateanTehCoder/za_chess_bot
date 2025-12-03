@@ -1,7 +1,5 @@
-__pycache__/**
-checkpoints/**
-plots/**
-videos/**
-*.log
-filelist.txt
-pieces/**
+__pycache__/
+checkpoints/
+*.pyc
+games.jsonl
+training.log

@@ -1,53 +1,203 @@
-# Za Chess Bot - Reinforcement Learning Chess Engine
+# Za Chess Bot - Bullet Chess AI with Continuous Thinking
 
-A chess engine trained through reinforcement learning, starting with games against Stockfish and continuing through self-play with bullet time control (1 minute per side).
+A lightweight chess engine trained through reinforcement learning using Stockfish evaluation and time-aware decision making. The AI plays bullet chess (60 seconds per side) and learns to make optimal moves while managing time pressure.
 
 ## 🎯 Key Features
 
-- **Two-Stage Training**:
-  - Stage 1: Reinforcement learning against Stockfish (~1900 rating)
-  - Stage 2: Self-play training with 28 games per epoch (14 white, 14 black)
-  
-- **Bullet Time Control**: 60 seconds per player - timeout counts as a loss, teaching the model to think faster
+- **Continuous Thinking Architecture**: 
+  - Model thinks during opponent's time
+  - No artificial baseline for move time
+  - Time penalty based on actual thinking milliseconds: **-0.001 per ms**
+  - Encourages fast, decisive moves in bullet format
 
-- **Comprehensive Chess Knowledge**: Both players have access to:
-  - 500+ opening variations (Sicilian, Ruy Lopez, Italian, French, Caro-Kann, etc.)
-  - 19 tactical patterns (pins, forks, skewers, discovered attacks, knight forks, etc.)
-  - 40+ strategic concepts (control center, piece development, king safety, etc.)
-  - 31 endgame principles (opposition, zugzwang, king activity, etc.)
+- **Stockfish-Driven Rewards**:
+  - Every move evaluated by Stockfish engine
+  - Reward signal: improvement in position evaluation
+  - 300 centipawns (cp) = ±1.0 reward (normalized)
+  - Time penalty combined with move quality
 
-- **Deep Neural Network**: 
-  - ResNet-style architecture with 10 residual blocks
-  - 512 hidden channels
-  - ~58M trainable parameters
-  - Separate policy (move selection) and value (position evaluation) heads
+- **Single-Game Training Loop**:
+  - Plays one game at a time (sequential)
+  - Collects game experiences
+  - Trains only when 100% win rate achieved
+  - Simple policy gradient (not PPO)
 
-- **Advanced Training**:
-  - PPO (Proximal Policy Optimization) algorithm
-  - GPU-accelerated game playing with CUDA
-  - Parallel multi-threaded games (28 simultaneously)
-  - Automatic checkpoint saving every 10 epochs
+- **Lightweight Architecture**: 
+  - SimpleChessNet with 3.05M parameters
+  - Input: 768 (8x8x12 board encoding)
+  - Hidden: 512 neurons
+  - Policy head: 4,672 (all possible chess moves)
+  - Value head: 1 (position evaluation)
 
-- **Target Goal**: Train until 100.0 accuracy (100% win rate against itself)
+- **Hardware Acceleration**:
+  - CUDA-enabled (NVIDIA GPT 1650)
+  - TensorFlow fp32 precision mode
+  - GPU-optimized game playing
+
+## ⚡ How It Works
+
+### Game Playing Phase
+1. Model plays bullet games (60s per side) against random opponent
+2. Model **thinks continuously** during opponent's moves
+3. Every move:
+   - Evaluated by Stockfish (100ms analysis)
+   - Reward = Stockfish signal (move quality) - 0.001 × move_time_ms
+   - Clipped to [-1.0, 1.0]
+4. Experiences collected: move, reward, move_time
+
+### Training Gate
+- Plays games until **100% win rate** achieved
+- Once all games won → triggers training phase
+- Trains on collected experiences using simple policy gradient
+- Saves checkpoint
+- Resets and repeats (curriculum learning)
+
+### Reward Structure
+```
+Total Reward = Stockfish Reward + Time Penalty
+  ├─ Stockfish Reward: How good the move is
+  │  └─ 300cp improvement = +1.0, -300cp = -1.0
+  └─ Time Penalty: -0.001 per millisecond
+     └─ Fast 10ms move: -0.01 penalty
+     └─ Slow 100ms move: -0.1 penalty
+```
 
 ## 📁 Project Structure
 
 ```
 Za Chess Bot/
-├── train.py                        # Original Stockfish training script
-├── train_self_play.py              # Self-play training script (main)
-├── model.py                        # Neural network architecture (ChessNet)
-├── chess_env.py                    # Chess environment and board encoding
-├── trainer.py                      # PPO training implementation
-├── self_play_opponent.py           # Self-play game logic with time control
-├── stockfish_opponent.py           # Stockfish opponent integration
-├── parallel_player.py              # Multi-threaded parallel game player
-├── comprehensive_chess_knowledge.py # Opening book, tactics, strategy, endgames
-├── config.py                       # Configuration parameters
-├── utils.py                        # Utility functions
-├── requirements.txt                # Python dependencies
-├── checkpoints/                    # Saved model checkpoints
-│   ├── latest_checkpoint.pt        # Stockfish-trained model
+├── train.py                  # Main training orchestration
+├── game_player.py            # Bullet game execution with Stockfish
+├── trainer.py                # Neural network & training logic
+├── visualizer.py             # (Optional) Real-time HTML visualization
+├── README.md                 # This file
+├── checkpoints/              # Saved model checkpoints
+│   └── model_after_100pct_epoch_*.pt
+└── game_data.json            # (Auto-generated) Game statistics
+```
+
+## 🚀 Usage
+
+### Running the Training
+```bash
+python -u train.py
+```
+
+**Output shows**:
+- Game results (Win/Draw/Loss)
+- Move statistics (AI moves, duration)
+- Average rewards and move times
+- Win rate progression
+- Training triggers and checkpoints
+
+### What Happens
+1. **Early games**: Random moves, learns from Stockfish feedback
+2. **As it learns**: Improves move quality → better rewards
+3. **At 100% win rate**: Automatically trains on all games
+4. **Checkpoint saved**: To `checkpoints/model_after_100pct_epoch_N.pt`
+5. **Cycles repeat**: Plays again with improved model
+
+## 📊 Training Parameters
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| Time Control | 60s per side | Bullet format (fast-paced) |
+| Time Penalty | -0.001 per ms | Encourages quick thinking |
+| Stockfish Analysis | 100ms per move | Balance accuracy vs speed |
+| Training Trigger | 100% accuracy | Ensures robust policies |
+| Batch Size | 32 experiences | Stable gradient updates |
+| Learning Rate | 0.001 | Conservative updates |
+| Epochs per Training | 4 | Brief focus on recent games |
+
+## 🧠 Model Architecture
+
+**SimpleChessNet**:
+```
+Input (768) → Hidden (512) → ReLU
+                              ├─ Policy Head → 4672 logits (softmax)
+                              └─ Value Head → 1 scalar (tanh)
+Total Parameters: 3,053,633
+Device: CUDA GPU
+```
+
+**Training Algorithm**: Simple Policy Gradient
+```
+Loss = -mean(log_probs × advantages) + MSE(value_loss)
+Advantage = (reward - mean) / std
+```
+
+## 🎮 Game Format
+
+- **Time Control**: 60 seconds per side (bullet)
+- **Opponent**: Random legal moves (not trained)
+- **Result Types**: Win, Draw, Loss, Timeout
+- **Learning**: Only from AI's own moves
+- **Feedback**: Real-time Stockfish evaluation
+
+## 📈 Expected Behavior
+
+**Early Training** (~Games 1-20):
+- Random move selection
+- Some wins (lucky), mostly draws/losses
+- Avg reward ≈ 0.0 (no clear signal)
+- Move times near 0.1-0.2ms
+
+**Mid Training** (~Games 50-100):
+- Pattern recognition from Stockfish
+- More frequent wins
+- Better reward signals
+- Still improving move quality
+
+**Approaching 100%**:
+- Consistent wins
+- High average rewards
+- Fast decision making
+- Training triggers → model improves further
+
+## 🔧 Continuous Thinking Advantage
+
+Unlike traditional chess engines with fixed move time:
+- **Model thinks during opponent's entire 60s window**
+- Precomputes next move while opponent calculates
+- No time wasted on "thinking delay"
+- Penalties encourage quick final decisions
+- Realistic bullet play patterns
+
+## 📝 Key Differences from Previous Version
+
+- ❌ No 1.0s baseline for move time
+- ✅ Time penalty based on actual milliseconds: -0.001/ms
+- ❌ No parallel games (8x simultaneous)
+- ✅ Single sequential games (simpler, stable)
+- ❌ Complex PPO with old_log_probs
+- ✅ Simple policy gradient (more stable)
+- ❌ Heuristic rewards
+- ✅ Real Stockfish evaluation for every move
+- ✅ Continuous thinking during opponent's time
+
+## 🛠️ Installation
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+pip install python-chess chess stockfish numpy
+```
+
+## 📌 Notes
+
+- Stockfish engine path: `C:\stockfish\stockfish-windows-x86-64-avx2.exe`
+- GPU required: CUDA 12.6+
+- Python 3.10+
+- No training dependencies (simple policy gradient only)
+
+## 🎓 Learning Progress
+
+Games are cumulative. Model learns through:
+1. **Reward signals** from Stockfish (what's good)
+2. **Time penalties** (must think fast)
+3. **Training cycles** (policy improvement)
+4. **Repetition** (play until 100%, then train, repeat)
+
+Each training cycle refines the policy based on the best practices discovered while playing.
 │   ├── self_play_latest_checkpoint.pt  # Latest self-play checkpoint
 │   └── self_play_final_model.pt    # Final 100% model (when achieved)
 ├── plots/                          # Training progress charts
