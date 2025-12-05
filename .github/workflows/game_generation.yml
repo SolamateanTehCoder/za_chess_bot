@@ -1,0 +1,136 @@
+name: Bullet Chess Game Generation
+
+on:
+  schedule:
+    # Run every 5 hours
+    - cron: '0 */5 * * *'
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+    inputs:
+      duration_hours:
+        description: 'Duration to run games (hours)'
+        required: false
+        default: '5'
+      max_games:
+        description: 'Maximum games to generate'
+        required: false
+        default: '1000'
+
+env:
+  PYTHON_VERSION: '3.10'
+  STOCKFISH_VERSION: '16'
+
+jobs:
+  generate_games:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330  # 5.5 hours to account for setup/cleanup
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          # Fetch all history for checkpoint loading
+          fetch-depth: 0
+          lfs: true
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install Stockfish
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y stockfish
+          stockfish --version
+      
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install python-chess numpy
+      
+      - name: Download latest model checkpoint
+        run: |
+          # Try to download the latest checkpoint from releases
+          mkdir -p checkpoints
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
+          if echo "$LATEST_RELEASE" | grep -q "model_checkpoint"; then
+            DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | grep 'browser_download_url' | grep 'model_checkpoint' | head -1 | cut -d'"' -f4)
+            if [ -n "$DOWNLOAD_URL" ]; then
+              echo "Downloading checkpoint from: $DOWNLOAD_URL"
+              wget -O checkpoints/latest_checkpoint.pt "$DOWNLOAD_URL"
+            fi
+          fi
+          ls -lah checkpoints/ || echo "No checkpoint directory"
+        continue-on-error: true
+      
+      - name: Generate games
+        run: |
+          DURATION=${{ github.event.inputs.duration_hours || 5 }}
+          MAX_GAMES=${{ github.event.inputs.max_games || 1000 }}
+          echo "Running for $DURATION hours with max $MAX_GAMES games"
+          python game_generator.py "$DURATION" "$MAX_GAMES"
+      
+      - name: Upload game batch
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: game-batch-${{ github.run_number }}-${{ github.run_attempt }}
+          path: game_batches/
+          retention-days: 30
+      
+      - name: Create GitHub Release with games
+        if: success()
+        uses: softprops/action-gh-release@v1
+        with:
+          files: game_batches/*
+          tag_name: games-${{ github.run_number }}-${{ github.run_id }}
+          body: |
+            ## Game Batch #${{ github.run_number }}
+            
+            **Run Details:**
+            - Workflow Run: ${{ github.run_id }}
+            - Attempt: ${{ github.run_attempt }}
+            - Triggered: ${{ github.event_name }}
+            - Generated: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            **Files:**
+            - Check artifacts below
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update game count badge
+        if: always()
+        run: |
+          # Count games in batch
+          if [ -f "game_batches/"*.jsonl ]; then
+            GAME_COUNT=$(cat game_batches/*.jsonl | wc -l)
+            echo "Games generated in this run: $GAME_COUNT"
+          fi
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up temporary files..."
+          rm -rf game_batches/
+          echo "Done"
+
+  check_games:
+    needs: generate_games
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Check game generation status
+        run: |
+          if [ "${{ needs.generate_games.result }}" == "success" ]; then
+            echo "✅ Game generation successful"
+            exit 0
+          else
+            echo "❌ Game generation failed"
+            exit 1
+          fi

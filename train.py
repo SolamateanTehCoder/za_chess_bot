@@ -94,17 +94,25 @@ def load_training_state(checkpoint_dir: Path):
     if not checkpoint_dir.exists():
         return 0, None
     
-    # Find latest checkpoint
-    checkpoints = sorted(checkpoint_dir.glob("model_after_100pct_epoch_*.pt"))
-    if not checkpoints:
-        return 0, None
+    # Find latest checkpoint - prefer game checkpoints (self-play), fallback to epoch checkpoints
+    game_checkpoints = list(checkpoint_dir.glob("model_checkpoint_game_*.pt"))
+    epoch_checkpoints = sorted(checkpoint_dir.glob("model_after_100pct_epoch_*.pt"))
     
-    latest = checkpoints[-1]
+    if game_checkpoints:
+        # Sort by game number numerically, not lexicographically
+        game_checkpoints.sort(key=lambda p: int(p.stem.split('_')[-1]))
+        latest = game_checkpoints[-1]
+    elif epoch_checkpoints:
+        latest = epoch_checkpoints[-1]
+    else:
+        return 0, None
     
     try:
         checkpoint = torch.load(latest, map_location='cpu')
-        total_games = checkpoint.get('total_games_played', 0)
-        epoch = checkpoint.get('epoch', 0)
+        # Extract metadata from nested structure
+        metadata = checkpoint.get('metadata', checkpoint)  # Fallback to top-level if no metadata key
+        total_games = metadata.get('total_games_played', 0)
+        epoch = metadata.get('epoch', 0)
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Found checkpoint: {latest.name}")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Training epoch: {epoch}, Total games: {total_games}")
@@ -150,10 +158,16 @@ def main():
     # Load checkpoint if available
     if checkpoint:
         try:
-            model.load_state_dict(checkpoint['model_state'])
+            # Try both naming conventions
+            if 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+            elif 'model_state' in checkpoint:
+                model.load_state_dict(checkpoint['model_state'])
+            else:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: No model state found in checkpoint")
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Model loaded from checkpoint")
-        except:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Could not load model state from checkpoint")
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Could not load model state from checkpoint: {e}")
     
     trainer = ChessTrainer(model, device=device, learning_rate=0.001)
     game_player = BulletGamePlayer(model, device=device, stockfish_analyzer=StockfishAnalyzer())
@@ -173,11 +187,23 @@ def main():
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] " + "=" * 80)
     
     # Game playing phase
+    # Initialize from checkpoint if available
+    if checkpoint:
+        metadata = checkpoint.get('metadata', checkpoint)  # Fallback to top-level
+        total_games_completed = metadata.get('total_games_played', 0)
+        white_wins = metadata.get('white_wins', 0)
+        black_wins = metadata.get('black_wins', 0)
+        draws = metadata.get('draws', 0)
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Resuming from game {total_games_completed + 1}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Previous stats: {white_wins}W {black_wins}L {draws}D")
+    else:
+        total_games_completed = 0
+        white_wins = 0
+        black_wins = 0
+        draws = 0
+    
     game_count = 0
     self_play_count = 0  # Counts self-play games (model vs model)
-    white_wins = 0
-    black_wins = 0
-    draws = 0
     game_experiences = []
     
     try:
@@ -194,7 +220,7 @@ def main():
             game_duration = (datetime.now() - game_start).total_seconds()
             
             # Log the game from white's perspective
-            logger.log_game(overall_game_num, True, result_white['result'], game_duration)
+            logger.log_game(overall_game_num, True, result_white, game_duration)
             
             # Track result
             if result_white['result'] == 'Win':
