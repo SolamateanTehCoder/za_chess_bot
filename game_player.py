@@ -1,8 +1,7 @@
 """
 Bullet chess game player with Stockfish-based reward system.
 Plays one game at a time with 60 second time control per side.
-Model thinks during opponent's time, gets Stockfish rewards asynchronously.
-Training only starts after model reaches 100% accuracy.
+Uses neural network policy to select moves, gets Stockfish rewards.
 """
 
 import os
@@ -16,6 +15,61 @@ from pathlib import Path
 import time as time_module
 import threading
 from queue import Queue
+
+
+def encode_board_state(board: chess.Board) -> np.ndarray:
+    """
+    Encode chess board state to 768-dimensional vector (8x8x12 planes).
+    12 planes: 6 white pieces + 6 black pieces
+    
+    Args:
+        board: Chess board position
+        
+    Returns:
+        768-dimensional numpy array
+    """
+    piece_map = {
+        chess.PAWN: 0, chess.ROOK: 1, chess.KNIGHT: 2,
+        chess.BISHOP: 3, chess.QUEEN: 4, chess.KING: 5
+    }
+    
+    # Create 12 planes (6 white + 6 black)
+    board_state = np.zeros((12, 8, 8), dtype=np.float32)
+    
+    for square, piece in board.piece_map().items():
+        rank, file = divmod(square, 8)
+        color_offset = 0 if piece.color == chess.WHITE else 6
+        piece_type = piece_map.get(piece.piece_type, 0)
+        plane = color_offset + piece_type
+        board_state[plane, rank, file] = 1.0
+    
+    # Flatten to 768D vector
+    return board_state.reshape(-1)
+
+
+def get_move_indices(board: chess.Board) -> dict:
+    """
+    Map legal moves to indices in the policy output (4672 moves).
+    Uses standard chess move encoding: from_square (64) * to_square (64) + other_moves
+    
+    Args:
+        board: Chess board position
+        
+    Returns:
+        Dict mapping move UCI strings to policy indices
+    """
+    move_to_index = {}
+    
+    for move in board.legal_moves:
+        from_sq = move.from_square  # 0-63
+        to_sq = move.to_square      # 0-63
+        
+        # Simple encoding: from_square * 64 + to_square
+        # This covers basic queen-like moves (64*64 = 4096 possible moves)
+        idx = from_sq * 64 + to_sq
+        move_to_index[move.uci()] = idx
+    
+    return move_to_index
 
 # PyTorch setup
 os.environ['TORCH_COMPILE_DEBUG'] = '0'
@@ -36,18 +90,18 @@ class StockfishAnalyzer:
     """Stockfish-based move evaluation and reward calculation."""
     
     def __init__(self, stockfish_path: str = r"C:\stockfish\stockfish-windows-x86-64-avx2.exe", 
-                 depth: int = 10, time_limit: float = 0.01):
+                 depth: int = 20, time_limit: float = 0.5):
         """
         Initialize Stockfish analyzer.
         
         Args:
             stockfish_path: Path to Stockfish executable
-            depth: Analysis depth (reduced for speed)
-            time_limit: Time limit per analysis in seconds (very fast)
+            depth: Analysis depth (20 for stronger evaluation)
+            time_limit: Time limit per analysis in seconds (0.5s = 500ms for quality)
         """
         self.stockfish_path = stockfish_path
         self.depth = depth
-        self.time_limit = time_limit  # 10ms per analysis - very fast
+        self.time_limit = time_limit  # 500ms per analysis - gives Stockfish proper time
         self.engine = None
         self._init_engine()
         self.cached_evals = {}  # Cache FEN evaluations
@@ -247,7 +301,7 @@ class BulletGamePlayer:
                 is_ai_turn = (board.turn == chess.WHITE) == play_as_white
                 
                 if is_ai_turn:
-                    # AI move - make it fast
+                    # AI move - use neural network policy
                     move_start = time_module.time()
                     
                     # Get legal moves
@@ -258,8 +312,52 @@ class BulletGamePlayer:
                     # Save FEN before move
                     fen_before = board.fen()
                     
-                    # Compute move (random selection for now)
-                    move = np.random.choice(legal_moves)
+                    # Get move from model or random if no model
+                    if self.model is not None:
+                        try:
+                            # Encode board state
+                            board_state = encode_board_state(board)
+                            board_tensor = torch.from_numpy(board_state).float().unsqueeze(0).to(self.device)
+                            
+                            # Get policy from model
+                            with torch.no_grad():
+                                policy, _ = self.model(board_tensor)
+                                policy = policy.cpu().numpy()[0]  # Get first (only) batch
+                            
+                            # Get indices for legal moves
+                            move_indices = get_move_indices(board)
+                            legal_move_list = list(legal_moves)
+                            
+                            # Create mask for legal moves in policy output
+                            legal_mask = np.full(4672, -np.inf, dtype=np.float32)
+                            for move in legal_move_list:
+                                idx = move_indices.get(move.uci(), -1)
+                                if idx >= 0 and idx < 4672:
+                                    legal_mask[idx] = policy[idx]
+                            
+                            # Select move with highest policy probability
+                            best_idx = np.argmax(legal_mask)
+                            
+                            # Find which move this corresponds to
+                            move = None
+                            for m in legal_move_list:
+                                idx = move_indices.get(m.uci(), -1)
+                                if idx == best_idx:
+                                    move = m
+                                    break
+                            
+                            # Fallback to random if no match (shouldn't happen)
+                            if move is None:
+                                move = np.random.choice(legal_move_list)
+                        
+                        except Exception as e:
+                            # Fallback to random on any error
+                            print(f"[WARN] Model inference failed: {e}, using random move")
+                            move = np.random.choice(legal_moves)
+                    else:
+                        # No model - use random moves
+                        move = np.random.choice(legal_moves)
+                    
                     move_time_ms = (time_module.time() - move_start) * 1000
                     
                     # Penalty based on actual thinking time
@@ -344,9 +442,9 @@ class BulletGamePlayer:
 
 
 def main():
-    """Main game playing loop."""
+    """Main game playing loop with neural network move selection."""
     print("=" * 80)
-    print("BULLET CHESS GAME PLAYER")
+    print("BULLET CHESS GAME PLAYER - NEURAL NETWORK POWERED")
     print("=" * 80)
     
     # Setup
@@ -355,24 +453,52 @@ def main():
     if device.type == 'cuda':
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] GPU: {torch.cuda.get_device_name(0)}")
     
-    # Initialize Stockfish analyzer
+    # Import model
+    from trainer import SimpleChessNet
+    
+    # Try to load checkpoint
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Loading model...")
+    model = SimpleChessNet().to(device)
+    
+    checkpoint_dir = Path("checkpoints")
+    if checkpoint_dir.exists():
+        game_checkpoints = list(checkpoint_dir.glob("model_checkpoint_game_*.pt"))
+        if game_checkpoints:
+            # Sort by game number numerically
+            game_checkpoints.sort(key=lambda p: int(p.stem.split('_')[-1]))
+            latest = game_checkpoints[-1]
+            try:
+                checkpoint = torch.load(latest, map_location=device)
+                if 'model_state_dict' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Loaded model from {latest.name}")
+                else:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Loaded checkpoint but using fresh model")
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Could not load checkpoint: {e}")
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Using fresh model")
+    
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    
+    # Initialize Stockfish analyzer with improved settings
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initializing Stockfish analyzer...")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Analysis depth: 20")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Time per position: 500ms")
     analyzer = StockfishAnalyzer()
     
-    # Create dummy model (placeholder)
+    # Create game player with model
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Creating game player...")
-    
-    # Create game player
-    player = BulletGamePlayer(None, device=device, stockfish_analyzer=analyzer)
+    player = BulletGamePlayer(model, device=device, stockfish_analyzer=analyzer)
     
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting game loop...")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Playing bullet games (60s per side)")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Baseline move time: {player.baseline_time:.1f}s")
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Pain penalty: -0.001 per ms over baseline")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Using neural network for move selection")
     print()
     
     # Play games
     game_count = 0
+    results = {'Win': 0, 'Loss': 0, 'Draw': 0}
+    
     try:
         while True:
             game_count += 1
@@ -382,16 +508,21 @@ def main():
             play_white = game_count % 2 == 1
             result = player.play_game(play_as_white=play_white)
             
+            results[result['result']] += 1
+            
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Result: {result['result']}")
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Moves by AI: {result['num_ai_moves']}")
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Total moves: {result['moves']}")
             
             if result['experiences']:
                 avg_reward = np.mean([exp['reward'] for exp in result['experiences']])
+                avg_stockfish = np.mean([exp['stockfish_reward'] for exp in result['experiences']])
                 avg_time = np.mean([exp['move_time_ms'] for exp in result['experiences']])
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Avg reward: {avg_reward:.4f}")
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Avg Stockfish reward: {avg_stockfish:.4f}")
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Avg move time: {avg_time:.1f}ms")
             
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Record: {results['Win']}W {results['Loss']}L {results['Draw']}D")
             print()
             sys.stdout.flush()
     
