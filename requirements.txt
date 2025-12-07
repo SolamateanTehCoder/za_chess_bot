@@ -1,0 +1,6 @@
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=0.15.0
+python-chess>=1.10.0
+stockfish>=3.25.0
+numpy>=1.24.0
