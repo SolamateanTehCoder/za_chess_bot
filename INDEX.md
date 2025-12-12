@@ -38,6 +38,21 @@ A **production-ready World Computer Chess Championship-level chess engine** with
 | PGN Export | `tournament.py` | ✅ Complete |
 | Performance Tracking | `tournament.py` | ✅ Complete |
 
+### ✅ Chess Strategies (NEW!)
+| Feature | File | Status |
+|---------|------|--------|
+| 8 Strategy Types | `strategy.py` | ✅ Implemented |
+| Aggressive Strategy | `strategy.py` | ✅ Working |
+| Defensive Strategy | `strategy.py` | ✅ Working |
+| Positional Strategy | `strategy.py` | ✅ Working |
+| Tactical Strategy | `strategy.py` | ✅ Working |
+| Endgame Strategy | `strategy.py` | ✅ Working |
+| Opening Strategy | `strategy.py` | ✅ Working |
+| Balanced Strategy | `strategy.py` | ✅ Working |
+| Machine Learning Strategy | `strategy.py` | ✅ Working |
+| Strategy Tournament Analysis | `strategy.py` | ✅ Ready |
+| All-Strategies Trainer | `train_all_strategies.py` | ✅ Tested |
+
 ### ✅ Neural Networks
 | Model | File | Parameters | Status |
 |-------|------|-----------|--------|
@@ -64,30 +79,58 @@ python quick_train.py
 # Generates 5 games, shows statistics
 ```
 
-### 2. **Play Interactive** (Human vs Bot)
+### 2. **Train with All Strategies** (NEW!)
 ```bash
+# Generate 5 quick games with random strategies
+python train_all_strategies.py --mode diverse --games 5
+
+# Generate 20 games for training
+python train_all_strategies.py --mode diverse --games 20
+
+# Test all 64 strategy combinations
+python train_all_strategies.py --mode complete
+```
+
+### 3. **Play Interactive with Strategy**
+```bash
+# Play with aggressive strategy
+python wccc_main.py --mode interactive --strategy aggressive
+
+# Play with defensive strategy
+python wccc_main.py --mode interactive --strategy defensive
+
+# Or use default balanced strategy
 python wccc_main.py --mode interactive
-# Type moves like: e2e4
 ```
 
-### 3. **Full Training Cycle** (30+ minutes)
+### 4. **Full Training Cycle** (30+ minutes)
 ```bash
+# Generate games with all strategies
+python train_all_strategies.py --mode diverse --games 100
+
+# Train neural network
 python wccc_main.py --mode train --games 100 --epochs 10
-# 1. Generates 100 games
-# 2. Trains neural network
-# 3. Tests performance
+
+# Evaluate performance
+python wccc_main.py --mode tournament --tournament-games 20
 ```
 
-### 4. **Tournament Mode** (Official)
+### 5. **Tournament Mode** (Official)
 ```bash
 python uci_engine.py
 # Use with Arena, Lichess, Chess.com, Chessbase
 ```
 
-### 5. **Verify Environment**
+### 6. **Verify Environment**
 ```bash
 python wccc_setup.py verify
 # Checks all dependencies
+```
+
+### 7. **View Strategy Commands**
+```bash
+python STRATEGY_COMMANDS.py
+# Shows all available strategy training commands
 ```
 
 ---
