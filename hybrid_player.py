@@ -16,6 +16,7 @@ from opening_book import OpeningBook
 from tablebase_manager import TablebaseManager
 from time_management import TimeManager, TimeControl
 from chess_models import SimpleChessNet, ChessNetV2
+from strategy import ChessStrategy
 
 
 class HybridChessPlayer:
@@ -51,6 +52,7 @@ class HybridChessPlayer:
         self.tablebase_manager = TablebaseManager()
         self.stockfish = None
         self.time_manager = None
+        self.strategy = ChessStrategy.from_config("balanced")  # Default balanced strategy
         
         # Initialize Stockfish
         self._init_stockfish()
@@ -222,7 +224,7 @@ class HybridChessPlayer:
         except:
             return 0.0
     
-    def select_move(self, board: chess.Board, remaining_time_ms: int,
+    def select_move(self, board: chess.Board, remaining_time_ms: int = 5000,
                    use_book: bool = True, use_tb: bool = True) -> str:
         """
         Select best move using hybrid strategy.
@@ -231,6 +233,7 @@ class HybridChessPlayer:
         1. Tablebase (if endgame)
         2. Opening book (if in opening)
         3. Neural network + Stockfish validation
+        4. Strategy-based move selection (if active)
         
         Args:
             board: Current board position
@@ -257,7 +260,16 @@ class HybridChessPlayer:
                 self.stats["book_moves"] += 1
                 return book_move
         
-        # 3. Neural network move selection with Stockfish validation
+        # 3. Strategy-based move selection (if strategy is active and not ML-focused)
+        if self.strategy and self.strategy.name != "machine_learning":
+            legal_moves = list(board.legal_moves)
+            if legal_moves:
+                best_move = self.strategy.select_best_move(board, legal_moves)
+                if best_move:
+                    self.stats["nn_moves"] += 1
+                    return best_move.uci()
+        
+        # 4. Neural network move selection with Stockfish validation
         try:
             with torch.no_grad():
                 board_tensor = self.encode_board(board).unsqueeze(0)
@@ -275,6 +287,23 @@ class HybridChessPlayer:
                 return nn_move
         except Exception as e:
             print(f"[WARN] Neural network move failed: {e}")
+        
+        # 5. Fallback: Stockfish best move
+        if self.stockfish:
+            try:
+                limit = chess.engine.Limit(time=0.5, depth=15)
+                result = self.stockfish.play(board, limit)
+                self.stats["stockfish_moves"] += 1
+                return result.move.uci()
+            except:
+                pass
+        
+        # 6. Last resort: first legal move
+        legal_moves = list(board.legal_moves)
+        if legal_moves:
+            return legal_moves[0].uci()
+        
+        return None
         
         # 4. Fallback: Stockfish best move
         if self.stockfish:

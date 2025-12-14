@@ -83,7 +83,8 @@ class ChessStrategy:
         score += self.config['position_weight'] * position_score
         
         # Endgame specific
-        if board_copy.pieces(chess.QUEEN).count() == 0:
+        if len(board_copy.pieces(chess.QUEEN, chess.WHITE)) == 0 and \
+           len(board_copy.pieces(chess.QUEEN, chess.BLACK)) == 0:
             score += self.config['endgame_weight'] * 10
         
         return max(0, min(100, score))  # Clamp between 0 and 100

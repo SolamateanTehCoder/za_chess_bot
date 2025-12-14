@@ -1,6 +1,7 @@
 """
 WCCC Training & Competition Main Loop
 Complete pipeline for training and tournament play.
+Now with comprehensive strategy support!
 """
 
 import torch
@@ -13,6 +14,8 @@ from hybrid_player import HybridChessPlayer
 from advanced_trainer import TrainingPipeline
 from tournament import Tournament, GameResult
 from chess_models import ChessNetV2
+from comprehensive_trainer import ComprehensiveStrategyTrainer
+from chess_strategies import ChessStrategy
 import chess
 
 
@@ -319,6 +322,61 @@ class WCCCMainLoop:
         
         print("\nGame over!")
         print(board)
+    
+    def run_strategy_training(self, num_games: int = 50, 
+                            num_cycles: int = 3,
+                            epochs_per_cycle: int = 10):
+        """
+        Run comprehensive strategy training.
+        Plays all strategies against each other and learns from both sides.
+        
+        Args:
+            num_games: Games per cycle
+            num_cycles: Number of training cycles
+            epochs_per_cycle: Training epochs per cycle
+        """
+        print("\n" + "="*80)
+        print("COMPREHENSIVE STRATEGY TRAINING")
+        print("="*80)
+        print(f"Games per Cycle: {num_games}")
+        print(f"Training Cycles: {num_cycles}")
+        print(f"Epochs per Cycle: {epochs_per_cycle}\n")
+        
+        # Initialize strategy trainer
+        strategy_trainer = ComprehensiveStrategyTrainer(device=self.device)
+        
+        # Run training cycles
+        all_stats = []
+        for cycle in range(num_cycles):
+            print(f"\n[CYCLE {cycle+1}/{num_cycles}]")
+            
+            stats = strategy_trainer.train_cycle(
+                num_games=num_games,
+                epochs=epochs_per_cycle,
+                save_checkpoint=True
+            )
+            
+            all_stats.append(stats)
+        
+        # Save all games
+        strategy_trainer.save_games_to_file()
+        
+        # Print overall summary
+        print("\n" + "="*80)
+        print("STRATEGY TRAINING SUMMARY")
+        print("="*80)
+        print(f"Total Cycles: {num_cycles}")
+        print(f"Total Training Games: {num_cycles * num_games}")
+        print(f"Training Examples Generated: {len(strategy_trainer.training_data)}")
+        
+        print("\nStrategy Statistics:")
+        for strat in sorted(strategy_trainer.strategy_stats.keys()):
+            stats = strategy_trainer.strategy_stats[strat]
+            if stats["games_played"] > 0:
+                win_rate = stats["wins"] / stats["games_played"]
+                print(f"  {strat:15s}: {win_rate:.1%} win rate ({stats['wins']}/{stats['games_played']})")
+        
+        print("="*80 + "\n")
 
 
 def main():
@@ -326,7 +384,7 @@ def main():
     parser = argparse.ArgumentParser(description="WCCC Chess Bot Training & Competition")
     
     parser.add_argument("--mode", default="train",
-                       choices=["train", "play", "interactive", "tournament"],
+                       choices=["train", "play", "interactive", "tournament", "strategy"],
                        help="Mode to run")
     parser.add_argument("--games", type=int, default=100,
                        help="Number of self-play games")
@@ -336,6 +394,10 @@ def main():
                        help="Path to model checkpoint")
     parser.add_argument("--tournament-games", type=int, default=20,
                        help="Tournament test games")
+    parser.add_argument("--strategy-cycles", type=int, default=3,
+                       help="Strategy training cycles")
+    parser.add_argument("--strategy-games", type=int, default=50,
+                       help="Strategy games per cycle")
     
     args = parser.parse_args()
     
@@ -355,6 +417,12 @@ def main():
         wccc.interactive_play()
     elif args.mode == "tournament":
         wccc.play_tournament(num_games=args.tournament_games)
+    elif args.mode == "strategy":
+        wccc.run_strategy_training(
+            num_games=args.strategy_games,
+            num_cycles=args.strategy_cycles,
+            epochs_per_cycle=args.epochs
+        )
     
     # Cleanup
     wccc.player.close()
