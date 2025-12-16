@@ -58,7 +58,11 @@ class ChessStrategy:
         # Check if move is capturing
         if board.is_capture(move):
             captured_piece = board.piece_at(move.to_square)
-            capture_value = self.piece_values.get(captured_piece.piece_type, 0)
+            if captured_piece:
+                capture_value = self.piece_values.get(captured_piece.piece_type, 0)
+            else:
+                # En passant capture (always a pawn)
+                capture_value = self.piece_values.get(chess.PAWN, 1)
             score += self.config['capture_weight'] * capture_value
         
         # Check if move gives check

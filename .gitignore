@@ -3,3 +3,4 @@ checkpoints/
 *.pyc
 games.jsonl
 training.log
+*.txt
