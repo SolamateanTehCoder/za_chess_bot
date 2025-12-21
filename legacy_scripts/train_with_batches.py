@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
 import torch
+from urllib.parse import urlparse
 
 # Import training infrastructure
 from train import load_training_state, SimpleChessNet
@@ -131,16 +132,20 @@ class TrainingCoordinator:
                 text=True
             ).strip()
             
-            # Handle both https and ssh formats
-            if "github.com" in remote_url:
-                if remote_url.startswith("git@"):
-                    # git@github.com:owner/repo.git
-                    parts = remote_url.split(":")[-1].replace(".git", "").split("/")
-                else:
-                    # https://github.com/owner/repo.git
-                    parts = remote_url.rstrip("/").replace(".git", "").split("/")
-                
-                return (parts[-2], parts[-1])
+            # Handle both https and ssh formats for GitHub remotes only
+            # SSH format: git@github.com:owner/repo.git
+            if remote_url.startswith("git@github.com:"):
+                parts = remote_url.split(":", 1)[-1].replace(".git", "").split("/")
+                if len(parts) >= 2:
+                    return (parts[-2], parts[-1])
+            
+            # HTTPS (and other URL-like) format: https://github.com/owner/repo.git
+            parsed = urlparse(remote_url)
+            if parsed.hostname == "github.com":
+                path_parts = parsed.path.rstrip("/").replace(".git", "").split("/")
+                # path is like /owner/repo
+                if len(path_parts) >= 3:
+                    return (path_parts[-2], path_parts[-1])
         except Exception as e:
             print(f"Error getting repo info: {e}")
         
