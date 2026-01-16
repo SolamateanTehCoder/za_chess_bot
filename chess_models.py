@@ -108,6 +108,28 @@ class MultiHeadAttention(nn.Module):
         return output
 
 
+class TransformerEncoderLayer(nn.Module):
+    """Self-attention transformer encoder layer."""
+    def __init__(self, hidden_size: int, num_heads: int, dropout: float = 0.1):
+        super().__init__()
+        self.self_attn = MultiHeadAttention(hidden_size, num_heads)
+        self.linear1 = nn.Linear(hidden_size, hidden_size * 4)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(hidden_size * 4, hidden_size)
+        self.norm1 = nn.LayerNorm(hidden_size)
+        self.norm2 = nn.LayerNorm(hidden_size)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+    def forward(self, src):
+        src2 = self.self_attn(src)
+        src = src + self.dropout1(src2)
+        src = self.norm1(src)
+        src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+        src = src + self.dropout2(src2)
+        src = self.norm2(src)
+        return src
+
 class ChessNetV2(nn.Module):
     """
     Enhanced chess neural network with residual blocks and attention.
@@ -115,9 +137,9 @@ class ChessNetV2(nn.Module):
     """
     
     def __init__(self, 
-                 input_size: int = 768,
+                 input_size: int = 832, # 8x8x13 (with extra features)
                  hidden_size: int = 512,
-                 num_residual_blocks: int = 4,
+                 num_residual_blocks: int = 8,
                  num_heads: int = 8,
                  num_policies: int = 4672,
                  dropout: float = 0.1):
@@ -125,7 +147,7 @@ class ChessNetV2(nn.Module):
         Initialize enhanced chess network.
         
         Args:
-            input_size: Input board encoding size (8x8x12)
+            input_size: Input board encoding size
             hidden_size: Hidden layer dimension
             num_residual_blocks: Number of residual blocks
             num_heads: Number of attention heads
@@ -148,10 +170,8 @@ class ChessNetV2(nn.Module):
             for _ in range(num_residual_blocks)
         ])
         
-        # Attention layer
-        self.attention = MultiHeadAttention(hidden_size, num_heads)
-        self.attention_norm = nn.LayerNorm(hidden_size)
-        self.attention_dropout = nn.Dropout(dropout)
+        # Attention layer (Transformer Encoder)
+        self.attention = TransformerEncoderLayer(hidden_size, num_heads, dropout)
         
         # Policy head (move selection)
         self.policy_layer1 = nn.Linear(hidden_size, hidden_size // 2)
@@ -196,15 +216,10 @@ class ChessNetV2(nn.Module):
         for block in self.residual_blocks:
             x = block(x)
         
-        # Attention (reshape for sequence attention)
-        # Treat each sample as a sequence of 1 element for self-attention
-        x_att = x.unsqueeze(1)  # (batch_size, 1, hidden_size)
-        x_att = self.attention(x_att)
-        x_att = x_att.squeeze(1)  # (batch_size, hidden_size)
-        
-        # Residual connection from attention
-        x = x + self.attention_dropout(x_att)
-        x = self.attention_norm(x)
+        # Attention Layer
+        x = x.unsqueeze(1) # Add sequence dimension
+        x = self.attention(x)
+        x = x.squeeze(1) # Remove sequence dimension
         
         # Policy head
         policy = self.policy_layer1(x)

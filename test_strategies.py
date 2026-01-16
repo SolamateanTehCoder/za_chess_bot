@@ -9,6 +9,8 @@ from strategy import ChessStrategy, STRATEGY_CONFIGS
 import chess
 import time
 
+import chess
+
 def test_single_strategy_game():
     """Test a single strategy playing against another."""
     print("\n" + "="*70)
@@ -48,10 +50,10 @@ def test_single_strategy_game():
                 strategy_used = "Defensive"
             
             if move:
-                board.push(move)
+                board.push(chess.Move.from_uci(move))
                 move_count += 1
                 if move_count % 10 == 0:
-                    print(f"  Move {move_count}: {move.uci()} ({strategy_used})")
+                    print(f"  Move {move_count}: {move} ({strategy_used})")
             else:
                 print(f"  ERROR: No move found!")
                 break
@@ -90,7 +92,7 @@ def test_all_strategies():
             move = player.select_move(board)
             if move:
                 results[strategy_name] = "[OK]"
-                print(f"  {strategy_name:20} -> {move.uci():6} [OK]")
+                print(f"  {strategy_name:20} -> {move:6} [OK]")
             else:
                 results[strategy_name] = "[FAIL]"
                 print(f"  {strategy_name:20} -> NO MOVE [FAIL]")
@@ -142,7 +144,7 @@ def test_mixed_strategy_tournament():
                     move = player_black.select_move(board)
                 
                 if move:
-                    board.push(move)
+                    board.push(chess.Move.from_uci(move))
                     move_count += 1
                 else:
                     break

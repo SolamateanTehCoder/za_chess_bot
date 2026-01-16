@@ -14,14 +14,17 @@ from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 import json
 from collections import deque
+import chess
+from tqdm import tqdm
+from hybrid_player import HybridChessPlayer
 
 from chess_models import ChessNetV2, SimpleChessNet
 
 
 class GameExperienceDataset(Dataset):
     """Dataset for training from game experiences."""
-    
-    def __init__(self, games_file: str, max_positions: int = 100000):
+
+    def __init__(self, games_file: str, max_positions: int = 1000000):
         """
         Initialize dataset from games file.
         
@@ -33,28 +36,76 @@ class GameExperienceDataset(Dataset):
         self.moves = []
         self.rewards = []
         self.game_outcomes = []
-        
+        self.encoder = HybridChessPlayer(use_enhanced_model=True, device='cpu')
+
         self._load_games(games_file, max_positions)
-    
+
+    def _uci_to_policy_index(self, uci_move: str) -> int:
+        """Convert UCI move string to policy index."""
+        try:
+            move = chess.Move.from_uci(uci_move)
+            return move.from_square * 64 + move.to_square
+        except:
+            return -1 # Should not happen with valid UCI
+
     def _load_games(self, games_file: str, max_positions: int):
         """Load games from JSONL file."""
         if not Path(games_file).exists():
             print(f"[WARN] Games file not found: {games_file}")
             return
-        
+
         with open(games_file) as f:
-            for line in f:
+            lines = f.readlines()
+            for line in tqdm(lines, desc=f"Loading games from {games_file}"):
                 if len(self.positions) >= max_positions:
                     break
                 
                 try:
                     data = json.loads(line)
-                    # Placeholder: in real implementation, decode position and move
-                    # For now, create dummy data for structure
-                except:
+                    moves = data.get("moves", [])
+                    result = data.get("result", "*")
+
+                    if not moves or result == "*":
+                        continue
+
+                    # Determine outcome
+                    if result == "1-0":
+                        outcome_val = 1.0
+                    elif result == "0-1":
+                        outcome_val = -1.0
+                    else:
+                        outcome_val = 0.0
+
+                    board = chess.Board()
+                    for move_uci in moves:
+                        if len(self.positions) >= max_positions:
+                            break
+
+                        # Encode current position
+                        encoded_board = self.encoder.encode_board(board).cpu().numpy()
+
+                        # Get policy index for the move
+                        policy_index = self._uci_to_policy_index(move_uci)
+                        if policy_index == -1:
+                            continue # Skip invalid moves
+
+                        # Determine outcome from current player's perspective
+                        perspective_outcome = outcome_val if board.turn == chess.WHITE else -outcome_val
+
+                        self.positions.append(encoded_board)
+                        self.moves.append(policy_index)
+                        self.game_outcomes.append(perspective_outcome)
+                        # Reward is 1 for a good move, -1 for a bad one.
+                        # We can use the game outcome as a proxy.
+                        self.rewards.append(perspective_outcome)
+
+                        board.push_uci(move_uci)
+
+                except Exception as e:
+                    # print(f"[WARN] Failed to parse game line: {e}")
                     continue
         
-        print(f"[INFO] Loaded {len(self.positions)} positions")
+        print(f"[INFO] Loaded {len(self.positions)} positions from {len(lines)} games.")
     
     def __len__(self):
         """Dataset length."""

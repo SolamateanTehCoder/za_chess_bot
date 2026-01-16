@@ -17,6 +17,7 @@ from tablebase_manager import TablebaseManager
 from time_management import TimeManager, TimeControl
 from chess_models import SimpleChessNet, ChessNetV2
 from strategy import ChessStrategy
+from mcts import MCTS
 
 
 class HybridChessPlayer:
@@ -53,6 +54,7 @@ class HybridChessPlayer:
         self.stockfish = None
         self.time_manager = None
         self.strategy = ChessStrategy.from_config("balanced")  # Default balanced strategy
+        self.mcts = MCTS(self)
         
         # Initialize Stockfish
         self._init_stockfish()
@@ -152,15 +154,36 @@ class HybridChessPlayer:
             chess.BISHOP: 3, chess.QUEEN: 4, chess.KING: 5
         }
         
-        board_state = np.zeros((12, 8, 8), dtype=np.float32)
+        # 13 channels: 12 for pieces, 1 for features
+        board_state = np.zeros((13, 8, 8), dtype=np.float32)
         
+        # Piece positions (channels 0-11)
         for square, piece in board.piece_map().items():
             rank, file = divmod(square, 8)
             color_offset = 0 if piece.color == chess.WHITE else 6
             piece_type = piece_map.get(piece.piece_type, 0)
             plane = color_offset + piece_type
             board_state[plane, rank, file] = 1.0
+
+        # Additional features (channel 12)
+        feature_plane = 12
+        # Castling rights
+        if board.has_kingside_castling_rights(chess.WHITE): board_state[feature_plane, 0, 0] = 1.0
+        if board.has_queenside_castling_rights(chess.WHITE): board_state[feature_plane, 0, 1] = 1.0
+        if board.has_kingside_castling_rights(chess.BLACK): board_state[feature_plane, 0, 2] = 1.0
+        if board.has_queenside_castling_rights(chess.BLACK): board_state[feature_plane, 0, 3] = 1.0
+
+        # Player to move
+        board_state[feature_plane, 1, 0] = 1.0 if board.turn == chess.WHITE else 0.0
         
+        # Move count (normalized)
+        board_state[feature_plane, 1, 1] = min(board.fullmove_number / 100.0, 1.0)
+
+        # En passant square
+        if board.ep_square:
+            rank, file = divmod(board.ep_square, 8)
+            board_state[feature_plane, 2 + rank, file] = 1.0
+
         tensor = torch.FloatTensor(board_state.reshape(-1)).to(self.device)
         return tensor
     
@@ -269,53 +292,23 @@ class HybridChessPlayer:
                     self.stats["nn_moves"] += 1
                     return best_move.uci()
         
-        # 4. Neural network move selection with Stockfish validation
+        # 4. MCTS move selection
         try:
-            with torch.no_grad():
-                board_tensor = self.encode_board(board).unsqueeze(0)
-                policy_logits, value = self.model(board_tensor)
-            
-            nn_move = self.get_move_from_policy(board, policy_logits)
-            
-            if nn_move:
-                # Validate with Stockfish
-                board.push_uci(nn_move)
-                sf_eval = self.evaluate_with_stockfish(board, depth=10, time_limit=0.1)
-                board.pop()
-                
+            # Adjust simulations based on time
+            if self.time_manager:
+                time_budget_ms = self.time_manager.get_move_time_allocation(board.turn, len(board.move_stack))
+                num_simulations = max(10, int(time_budget_ms / 10)) # ~10ms per simulation
+            else:
+                num_simulations = 100
+
+            move = self.mcts.search(board, num_simulations=num_simulations)
+            if move:
                 self.stats["nn_moves"] += 1
-                return nn_move
+                return move.uci()
         except Exception as e:
-            print(f"[WARN] Neural network move failed: {e}")
-        
-        # 5. Fallback: Stockfish best move
-        if self.stockfish:
-            try:
-                limit = chess.engine.Limit(time=0.5, depth=15)
-                result = self.stockfish.play(board, limit)
-                self.stats["stockfish_moves"] += 1
-                return result.move.uci()
-            except:
-                pass
-        
-        # 6. Last resort: first legal move
-        legal_moves = list(board.legal_moves)
-        if legal_moves:
-            return legal_moves[0].uci()
-        
-        return None
-        
-        # 4. Fallback: Stockfish best move
-        if self.stockfish:
-            try:
-                limit = chess.engine.Limit(time=0.5, depth=15)
-                result = self.stockfish.play(board, limit)
-                self.stats["stockfish_moves"] += 1
-                return result.move.uci()
-            except:
-                pass
-        
-        # 5. Last resort: first legal move
+            print(f"[WARN] MCTS move failed: {e}")
+
+        # 5. Fallback: first legal move
         legal_moves = list(board.legal_moves)
         if legal_moves:
             return legal_moves[0].uci()
