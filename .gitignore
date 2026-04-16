@@ -2,3 +2,4 @@
 **/stockfish_bin
 *.pth
 *.h5
+stockfish_setup.py
