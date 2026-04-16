@@ -1,6 +1,4 @@
-__pycache__/
-checkpoints/
-*.pyc
-games.jsonl
-training.log
-*.txt
+**/__pycache__
+**/stockfish_bin
+*.pth
+*.h5
